@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Morning Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #111;
+    color: #eee;
+    font-family: -apple-system, 'Segoe UI', Roboto, sans-serif;
+    padding: 24px;
+    min-height: 100vh;
+  }
+  .status-banner {
+    text-align: center;
+    font-size: 2rem;
+    font-weight: 700;
+    padding: 20px;
+    border-radius: 16px;
+    margin-bottom: 24px;
+    transition: background 0.4s ease;
+  }
+  .status-ok { background: #1b5e20; color: #c8e6c9; }
+  .status-delayed { background: #8a6d00; color: #fff3c4; }
+  .status-at_risk { background: #e65100; color: #ffe0b2; }
+  .status-alert { background: #b71c1c; color: #ffcdd2; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+  .card {
+    background: #1e1e1e;
+    border-radius: 16px;
+    padding: 24px;
+    transition: box-shadow 0.4s ease;
+  }
+  .card.leave-now {
+    box-shadow: 0 0 0 3px #e65100;
+    animation: pulse 1.5s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 3px #e65100; }
+    50% { box-shadow: 0 0 0 6px #ff8a4c; }
+  }
+  .card h2 {
+    font-size: 1.1rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #999;
+    margin-bottom: 16px;
+  }
+  .big-time {
+    font-size: 3rem;
+    font-weight: 700;
+  }
+  .sub-time {
+    font-size: 1.2rem;
+    color: #999;
+    margin-top: 4px;
+  }
+  .leave-by-line {
+    font-size: 1.3rem;
+    margin-top: 12px;
+    font-weight: 600;
+  }
+  .leave-by-line.urgent {
+    color: #ffb74d;
+  }
+  .tag-row {
+    margin-top: 8px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .delay-tag {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.9rem;
+    font-weight: 600;
+  }
+  .delay-ontime { background: #1b5e20; color: #c8e6c9; }
+  .delay-minor { background: #8a6d00; color: #fff3c4; }
+  .delay-late { background: #e65100; color: #ffe0b2; }
+
+  .weather-temp {
+    font-size: 3rem;
+    font-weight: 700;
+  }
+  .weather-condition {
+    font-size: 1.2rem;
+    color: #ccc;
+    margin-top: 4px;
+  }
+  .attire {
+    margin-top: 16px;
+    font-size: 1.4rem;
+  }
+  .commute-warning {
+    margin-top: 16px;
+    padding: 10px 14px;
+    background: #b71c1c;
+    border-radius: 10px;
+    font-size: 1rem;
+  }
+  .alerts-card {
+    grid-column: span 2;
+  }
+  .alert-item {
+    background: #b71c1c;
+    padding: 12px 16px;
+    border-radius: 12px;
+    margin-top: 10px;
+  }
+  .no-alerts {
+    color: #4caf50;
+    font-size: 1.1rem;
+  }
+  .transfer-info {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid #333;
+  }
+  .transfer-info div {
+    margin-bottom: 6px;
+    color: #bbb;
+  }
+  .inactive-window {
+    text-align: center;
+    color: #666;
+    font-size: 1.3rem;
+    padding: 40px 0;
+  }
+  .last-updated {
+    text-align: center;
+    color: #555;
+    margin-top: 20px;
+    font-size: 0.9rem;
+  }
+</style>
+</head>
+<body>
+
+<div id="statusBanner" class="status-banner">Loading...</div>
+
+<div class="grid">
+  <div class="card" id="commuteCard">
+    <h2>Commute</h2>
+    <div id="commuteContent">Loading...</div>
+  </div>
+
+  <div class="card" id="weatherCard">
+    <h2>Weather</h2>
+    <div id="weatherContent">Loading...</div>
+  </div>
+
+  <div class="card alerts-card" id="alertsCard">
+    <h2>Alerts</h2>
+    <div id="alertsContent">Loading...</div>
+  </div>
+</div>
+
+<div class="last-updated" id="lastUpdated"></div>
+
+<script>
+const STATUS_TEXT = {
+  ok: "✅ All Clear",
+  delayed: "🟡 Running Late",
+  at_risk: "⚠️ Tight Connection",
+  alert: "🚨 Service Alert"
+};
+
+function getPollInterval() {
+  const hour = new Date().getHours();
+  const inMorning = hour >= 5 && hour < 9;
+  const inAfternoon = hour >= 14 && hour < 19;
+  return (inMorning || inAfternoon) ? 60000 : 300000; // 1 min active, 5 min idle
+}
+
+function scheduleNextFetch() {
+  fetchDashboard().finally(() => {
+    setTimeout(scheduleNextFetch, getPollInterval());
+  });
+}
+
+async function fetchDashboard() {
+  try {
+    const res = await fetch('/api/dashboard');
+    const data = await res.json();
+    render(data);
+  } catch (err) {
+    document.getElementById('statusBanner').textContent = "Error loading dashboard";
+    console.error(err);
+  }
+}
+
+function delayTagClass(minutes) {
+  if (minutes <= 0) return 'delay-ontime';
+  if (minutes < 10) return 'delay-minor';
+  return 'delay-late';
+}
+
+function render(data) {
+  const banner = document.getElementById('statusBanner');
+  banner.className = 'status-banner status-' + data.overall_status;
+  banner.textContent = STATUS_TEXT[data.overall_status] || "Unknown status";
+
+  const commuteCard = document.getElementById('commuteCard');
+  const c = data.commute;
+
+  if (!data.active_window || c.error) {
+    commuteCard.classList.remove('leave-now');
+    document.getElementById('commuteContent').innerHTML =
+      `<div class="inactive-window">No active commute right now</div>`;
+  } else {
+    commuteCard.classList.toggle('leave-now', !!c.leave_now);
+
+    const totalDelayTag = c.total_delay_minutes > 0
+      ? `<span class="delay-tag ${delayTagClass(c.total_delay_minutes)}">${c.total_delay_minutes} min behind schedule</span>`
+      : `<span class="delay-tag delay-ontime">On time</span>`;
+
+    const leaveByClass = (c.leave_now || c.minutes_until_leave_by < 0) ? 'leave-by-line urgent' : 'leave-by-line';
+    let leaveByText;
+    if (c.already_departed) {
+      leaveByText = `🚫 Missed this train's ideal leave-by window`;
+    } else if (c.leave_now) {
+      leaveByText = `🏃 Leave now! (${c.leave_by_time})`;
+    } else if (c.minutes_until_leave_by < 0) {
+      leaveByText = `⏰ Leave-by was ${c.leave_by_time} (running behind)`;
+    } else {
+      leaveByText = `Leave by ${c.leave_by_time} (in ${c.minutes_until_leave_by} min)`;
+    }
+
+    let commuteHtml = `
+      <div class="big-time">${c.origin_actual_departure_time}</div>
+      <div class="sub-time">Scheduled ${c.origin_departure_time} · Train ${c.origin_train} (${c.origin_line})</div>
+      <div class="${leaveByClass}">${leaveByText}</div>
+      <div class="tag-row">${totalDelayTag}</div>
+    `;
+
+    if (c.trip_type === 'transfer') {
+      commuteHtml += `
+        <div class="transfer-info">
+          <div>🔄 Transfer at ${c.connection_station}</div>
+          <div>Connecting train ${c.connection_train} (${c.connection_line}) at ${c.connection_departure_time}${c.connection_delay_minutes > 0 ? ` (+${c.connection_delay_minutes} min)` : ''}</div>
+          <div>Transfer buffer: ${Math.round(c.transfer_buffer_minutes)} min</div>
+          <div>Arrive: ${c.actual_arrival_time}${c.actual_arrival_time !== c.arrival_time ? ` (scheduled ${c.arrival_time})` : ''}</div>
+        </div>
+      `;
+    } else {
+      commuteHtml += `
+        <div class="transfer-info">
+          <div>Direct train — no transfer needed</div>
+          <div>Arrive: ${c.actual_arrival_time}${c.actual_arrival_time !== c.arrival_time ? ` (scheduled ${c.arrival_time})` : ''}</div>
+        </div>
+      `;
+    }
+
+    document.getElementById('commuteContent').innerHTML = commuteHtml;
+  }
+
+  const w = data.weather;
+  let weatherHtml = `
+    <div class="weather-temp">${Math.round(w.high_f)}° / ${Math.round(w.low_f)}°</div>
+    <div class="weather-condition">${w.condition}</div>
+    <div class="attire">${w.attire_suggestion}</div>
+  `;
+  if (w.commute_warnings && w.commute_warnings.length > 0) {
+    weatherHtml += w.commute_warnings.map(warn =>
+      `<div class="commute-warning">⚠️ ${warn}</div>`
+    ).join('');
+  }
+  document.getElementById('weatherContent').innerHTML = weatherHtml;
+
+  const a = data.alerts;
+  let alertsHtml = '';
+  if (a.has_critical_alerts) {
+    alertsHtml += a.critical_alerts.map(alert =>
+      `<div class="alert-item">${alert.line}: ${Object.entries(alert.flags).filter(([k,v]) => v).map(([k]) => k).join(', ')}</div>`
+    ).join('');
+  }
+  if (a.has_recent_advisories) {
+    alertsHtml += a.recent_advisories.map(adv =>
+      `<div class="alert-item">${adv.line}: ${adv.advisory_text.replace(/<[^>]*>/g, '')}</div>`
+    ).join('');
+  }
+  if (!alertsHtml) {
+    alertsHtml = '<div class="no-alerts">No active alerts on your lines</div>';
+  }
+  document.getElementById('alertsContent').innerHTML = alertsHtml;
+
+  document.getElementById('lastUpdated').textContent =
+    'Last updated: ' + new Date().toLocaleTimeString();
+}
+
+scheduleNextFetch();
+</script>
+
+</body>
+</html>
