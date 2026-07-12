@@ -148,3 +148,21 @@ def get_alerts():
         "has_recent_advisories": len(standing_advisories) > 0,
         "recent_advisories": standing_advisories,
     }
+
+@app.get("/api/dashboard")
+def get_dashboard():
+    commute = get_commute()
+    alerts = get_alerts()
+
+    if alerts.get("has_critical_alerts"):
+        overall_status = "alert"
+    elif commute.get("at_risk"):
+        overall_status = "at_risk"
+    else:
+        overall_status = "ok"
+
+    return {
+        "overall_status": overall_status,
+        "commute": commute,
+        "alerts": alerts,
+    }
