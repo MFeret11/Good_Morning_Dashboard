@@ -1,4 +1,9 @@
 """Central place for all constants and configuration values."""
+import os
+
+from dotenv import load_dotenv
+
+load_dotenv()  # reads .env file into environment variables, if present
 
 SEPTA_BASE = "https://www3.septa.org/api"
 
@@ -25,6 +30,16 @@ AFTERNOON_START, AFTERNOON_END = 14, 19  # 2pm - 7pm
 # --- Alerts ---
 RELEVANT_LINES = {"Media/Wawa", "Manayunk/Norristown"}
 ADVISORY_RECENCY_DAYS = 3
+
+# --- Notifications ---
+# NTFY_TOPIC must be set via environment variable (.env file) - never hardcode
+# it here, since this file gets committed to git and the topic acts like a
+# shared secret (anyone who knows it can read/send to it on public ntfy.sh).
+NTFY_TOPIC = os.environ.get("NTFY_TOPIC")
+NTFY_BASE_URL = "https://ntfy.sh"
+# When the daily afternoon check fires (24hr clock, weekdays only)
+NOTIFY_HOUR = 16
+NOTIFY_MINUTE = 30
 
 # --- Weather ---
 WEATHER_LAT = 39.9168

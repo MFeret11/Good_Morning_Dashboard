@@ -12,9 +12,16 @@ from app.config import (
 from app.commute import get_commute_leg
 from app.alerts import get_alerts
 from app.weather import get_weather
+from app.scheduler import start_scheduler
+from app.afternoon_check import run_afternoon_check
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+@app.on_event("startup")
+def on_startup():
+    start_scheduler()
 
 
 @app.get("/dashboard")
@@ -67,6 +74,14 @@ def api_get_alerts():
 @app.get("/api/weather")
 def api_get_weather():
     return get_weather()
+
+
+@app.post("/api/test_notification")
+def test_notification():
+    """Manually trigger the afternoon check/notification, for testing without
+    waiting for the scheduled time."""
+    run_afternoon_check()
+    return {"status": "triggered"}
 
 
 def get_active_window() -> str | None:
