@@ -2,7 +2,9 @@ import re
 import requests
 from datetime import datetime, timedelta
 from fastapi import FastAPI
-from datetime import datetime as dt
+from datetime import datetime as dt, date
+from collections import Counter
+
 
 
 app = FastAPI()
@@ -153,6 +155,7 @@ def get_alerts():
 def get_dashboard():
     commute = get_commute()
     alerts = get_alerts()
+    weather = get_weather()
 
     if alerts.get("has_critical_alerts"):
         overall_status = "alert"
@@ -165,4 +168,126 @@ def get_dashboard():
         "overall_status": overall_status,
         "commute": commute,
         "alerts": alerts,
+        "weather": weather,
+    }
+
+WEATHER_LAT = 39.9168
+WEATHER_LON = -75.3880  # Media, PA
+
+# Codes we consider "severe enough to flag regardless of frequency"
+SEVERE_CODES = {
+    61: "Slight rain", 63: "Moderate rain", 65: "Heavy rain",
+    80: "Slight rain showers", 81: "Moderate rain showers", 82: "Violent rain showers",
+    95: "Thunderstorm", 96: "Thunderstorm with slight hail", 99: "Thunderstorm with heavy hail",
+    71: "Slight snow", 73: "Moderate snow", 75: "Heavy snow",
+}
+
+WMO_CODES = {
+    0: "Clear sky",
+    1: "Mainly clear",
+    2: "Partly cloudy",
+    3: "Overcast",
+    45: "Fog",
+    48: "Depositing rime fog",
+    51: "Light drizzle",
+    53: "Moderate drizzle",
+    55: "Dense drizzle",
+    61: "Slight rain",
+    63: "Moderate rain",
+    65: "Heavy rain",
+    71: "Slight snow",
+    73: "Moderate snow",
+    75: "Heavy snow",
+    80: "Slight rain showers",
+    81: "Moderate rain showers",
+    82: "Violent rain showers",
+    95: "Thunderstorm",
+    96: "Thunderstorm with slight hail",
+    99: "Thunderstorm with heavy hail",
+}
+
+@app.get("/api/weather")
+def get_weather():
+    params = {
+        "latitude": WEATHER_LAT,
+        "longitude": WEATHER_LON,
+        "hourly": "temperature_2m,precipitation,weather_code",
+        "temperature_unit": "fahrenheit",
+        "forecast_days": 1,
+        "timezone": "America/New_York",
+    }
+    response = requests.get("https://api.open-meteo.com/v1/forecast", params=params).json()
+    hourly = response.get("hourly", {})
+
+    times = hourly.get("time", [])
+    temps = hourly.get("temperature_2m", [])
+    precip = hourly.get("precipitation", [])
+    codes = hourly.get("weather_code", [])
+
+    day_window = []
+    for i, t in enumerate(times):
+        hour = int(t.split("T")[1].split(":")[0])
+        if 5 <= hour <= 20:
+            day_window.append({
+                "time": t,
+                "hour": hour,
+                "temp": temps[i],
+                "precip": precip[i],
+                "code": codes[i],
+            })
+
+    if not day_window:
+        return {"error": "No forecast data for window"}
+
+    max_temp = max(h["temp"] for h in day_window)
+    min_temp = min(h["temp"] for h in day_window)
+    total_precip = sum(h["precip"] for h in day_window)
+
+    # Overall vibe: most frequent condition across the day
+    code_counts = Counter(h["code"] for h in day_window)
+    most_common_code = code_counts.most_common(1)[0][0]
+    condition = WMO_CODES.get(most_common_code, "Unknown")
+
+    # Severe weather check, scoped to her actual commute hours
+    morning_window = [h for h in day_window if 5 <= h["hour"] <= 9]
+    evening_window = [h for h in day_window if 15 <= h["hour"] <= 19]
+
+    def find_severe(hours):
+        hits = [h for h in hours if h["code"] in SEVERE_CODES]
+        return hits[0] if hits else None
+
+    morning_severe = find_severe(morning_window)
+    evening_severe = find_severe(evening_window)
+
+    warnings = []
+    if morning_severe:
+        warnings.append(f"{SEVERE_CODES[morning_severe['code']]} expected around {morning_severe['time'].split('T')[1]} during your morning commute")
+    if evening_severe:
+        warnings.append(f"{SEVERE_CODES[evening_severe['code']]} expected around {evening_severe['time'].split('T')[1]} during your evening commute")
+
+    will_rain = total_precip > 0
+    needs_umbrella = bool(morning_severe or evening_severe) or will_rain
+
+    # Attire suggestion based on overall day, but escalate if severe weather hits commute windows
+    if needs_umbrella:
+        attire = "Raincoat + umbrella weather ☔"
+    elif max_temp >= 85:
+        attire = "Summer dress weather ☀️"
+    elif max_temp >= 70:
+        attire = "T-shirt weather 👕"
+    elif max_temp >= 55:
+        attire = "Light jacket weather 🧥"
+    elif max_temp >= 40:
+        attire = "Sweater weather 🧶"
+    else:
+        attire = "Bundle up, it's cold 🥶"
+
+    return {
+        "high_f": max_temp,
+        "low_f": min_temp,
+        "condition": condition,
+        "needs_umbrella": needs_umbrella,
+        "attire_suggestion": attire,
+        "commute_warnings": warnings,
+        "hourly_detail": day_window,
     }
