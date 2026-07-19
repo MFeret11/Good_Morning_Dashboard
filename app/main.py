@@ -1,13 +1,13 @@
 from datetime import datetime
 
-import requests
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from app.config import (
-    SEPTA_BASE, HOME_STATION, WORK_STATION,
+    HOME_STATION, WORK_STATION,
     MORNING_START, MORNING_END, AFTERNOON_START, AFTERNOON_END,
+    ACTIVE_POLL_INTERVAL_MS, IDLE_POLL_INTERVAL_MS,
 )
 from app.commute import get_commute_leg
 from app.alerts import get_alerts
@@ -34,28 +34,10 @@ def read_root():
     return {"status": "ok", "message": "SEPTA dashboard backend running"}
 
 
-# --- Debug/raw endpoints, handy for inspecting SEPTA's raw responses ---
-
-@app.get("/api/leg1")
-def get_leg1():
-    """Media -> 30th Street Station (raw)"""
-    params = {"req1": HOME_STATION, "req2": "30th Street Station", "top": 5}
-    response = requests.get(f"{SEPTA_BASE}/NextToArrive/index.php", params=params)
-    return response.json()
-
-
-@app.get("/api/leg2")
-def get_leg2():
-    """30th Street Station -> East Falls (raw)"""
-    params = {"req1": "30th Street Station", "req2": WORK_STATION, "top": 5}
-    response = requests.get(f"{SEPTA_BASE}/NextToArrive/index.php", params=params)
-    return response.json()
-
-
 # --- Core endpoints ---
 
-@app.get("/api/commute")
-def get_commute():
+@app.get("/api/commute_morning")
+def get_commute_morning():
     """Morning commute: home -> work"""
     return get_commute_leg(HOME_STATION, WORK_STATION)
 
@@ -121,6 +103,7 @@ def get_dashboard():
 
     return {
         "active_window": window,
+        "poll_interval_ms": ACTIVE_POLL_INTERVAL_MS if window else IDLE_POLL_INTERVAL_MS,
         "overall_status": overall_status,
         "commute": commute_display,
         "alerts": alerts,

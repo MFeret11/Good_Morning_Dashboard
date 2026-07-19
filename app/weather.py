@@ -23,9 +23,15 @@ def get_weather() -> dict:
         "temperature_unit": "fahrenheit",
         "forecast_days": 1,
         "timezone": "America/New_York",
+        "hourly": "temperature_2m,precipitation,precipitation_probability,weather_code",  
+        "current_weather": "true",  
     }
     response = requests.get("https://api.open-meteo.com/v1/forecast", params=params).json()
     hourly = response.get("hourly", {})
+    current = response.get("current_weather", {})
+    current_temp = current.get("temperature")
+
+    precip_probs = hourly.get("precipitation_probability", [])
 
     times = hourly.get("time", [])
     temps = hourly.get("temperature_2m", [])
@@ -42,6 +48,7 @@ def get_weather() -> dict:
                 "temp": temps[i],
                 "precip": precip[i],
                 "code": codes[i],
+                "precip_chance": precip_probs[i] if i < len(precip_probs) else 0,
             })
 
     if not day_window:
@@ -49,6 +56,7 @@ def get_weather() -> dict:
 
     max_temp = max(h["temp"] for h in day_window)
     min_temp = min(h["temp"] for h in day_window)
+    max_precip_chance = max((h["precip_chance"] for h in day_window), default=0)
     total_precip = sum(h["precip"] for h in day_window)
 
     # Overall vibe: most frequent condition across the day (not numeric max)
@@ -99,4 +107,6 @@ def get_weather() -> dict:
         "attire_suggestion": attire,
         "commute_warnings": warnings,
         "hourly_detail": day_window,
+        "current_temp_f": current_temp,
+        "precip_chance": max_precip_chance,
     }

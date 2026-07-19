@@ -12,19 +12,14 @@
     padding: 24px;
     min-height: 100vh;
   }
-  .status-banner {
+  
+  .greeting {
     text-align: center;
-    font-size: 2rem;
-    font-weight: 700;
-    padding: 20px;
-    border-radius: 16px;
-    margin-bottom: 24px;
-    transition: background 0.4s ease;
+    font-size: 1.4rem;
+    font-weight: 500;
+    color: #bbb;
+    margin-bottom: 8px;
   }
-  .status-ok { background: #1b5e20; color: #c8e6c9; }
-  .status-delayed { background: #8a6d00; color: #fff3c4; }
-  .status-at_risk { background: #e65100; color: #ffe0b2; }
-  .status-alert { background: #b71c1c; color: #ffcdd2; }
 
   .grid {
     display: grid;
@@ -82,6 +77,7 @@
     font-size: 0.9rem;
     font-weight: 600;
   }
+  .error-msg { text-align: center; color: #ff8a80; font-size: 1rem; margin-bottom: 12px; }
   .delay-ontime { background: #1b5e20; color: #c8e6c9; }
   .delay-minor { background: #8a6d00; color: #fff3c4; }
   .delay-late { background: #e65100; color: #ffe0b2; }
@@ -105,9 +101,6 @@
     background: #b71c1c;
     border-radius: 10px;
     font-size: 1rem;
-  }
-  .alerts-card {
-    grid-column: span 2;
   }
   .alert-item {
     background: #b71c1c;
@@ -140,11 +133,25 @@
     margin-top: 20px;
     font-size: 0.9rem;
   }
+
+  .clock {
+  text-align: center;
+  font-size: 7rem;
+  font-weight: 700;
+  letter-spacing: 3px;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 8px;
+}
 </style>
 </head>
 <body>
 
-<div id="statusBanner" class="status-banner">Loading...</div>
+<div id="clock" class="clock"></div>
+
+<div id="greeting" class="greeting"></div>
+<div id="errorMsg" class="error-msg"></div>
+<div id="errorMsg" class="error-msg"></div>
+<div id="alertsStandalone"></div>
 
 <div class="grid">
   <div class="card" id="commuteCard">
@@ -157,43 +164,31 @@
     <div id="weatherContent">Loading...</div>
   </div>
 
-  <div class="card alerts-card" id="alertsCard">
-    <h2>Alerts</h2>
-    <div id="alertsContent">Loading...</div>
-  </div>
 </div>
 
 <div class="last-updated" id="lastUpdated"></div>
 
 <script>
-const STATUS_TEXT = {
-  ok: "✅ All Clear",
-  delayed: "🟡 Running Late",
-  at_risk: "⚠️ Tight Connection",
-  alert: "🚨 Service Alert"
-};
 
-function getPollInterval() {
-  const hour = new Date().getHours();
-  const inMorning = hour >= 5 && hour < 9;
-  const inAfternoon = hour >= 14 && hour < 19;
-  return (inMorning || inAfternoon) ? 60000 : 300000; // 1 min active, 5 min idle
-}
+const DEFAULT_POLL_INTERVAL_MS = 60000; // used only before the first successful fetch
 
 function scheduleNextFetch() {
-  fetchDashboard().finally(() => {
-    setTimeout(scheduleNextFetch, getPollInterval());
+  fetchDashboard().then((intervalMs) => {
+    setTimeout(scheduleNextFetch, intervalMs || DEFAULT_POLL_INTERVAL_MS);
   });
 }
 
 async function fetchDashboard() {
   try {
+    document.getElementById('errorMsg').textContent = '';
     const res = await fetch('/api/dashboard');
     const data = await res.json();
     render(data);
+    return data.poll_interval_ms;
   } catch (err) {
-    document.getElementById('statusBanner').textContent = "Error loading dashboard";
+    document.getElementById('errorMsg').textContent = "Couldn't reach the dashboard — retrying...";
     console.error(err);
+    return DEFAULT_POLL_INTERVAL_MS;
   }
 }
 
@@ -203,19 +198,50 @@ function delayTagClass(minutes) {
   return 'delay-late';
 }
 
+function updateClock() {
+  const now = new Date();
+  let h = now.getHours() % 12;
+  if (h === 0) h = 12;
+  const m = String(now.getMinutes()).padStart(2, '0');
+  const s = String(now.getSeconds()).padStart(2, '0');
+  const ampm = now.getHours() >= 12 ? 'PM' : 'AM';
+  document.getElementById('clock').textContent = `${h}:${m}:${s} ${ampm}`;
+}
+
+updateClock();
+setInterval(updateClock, 1000);
+
 function render(data) {
-  const banner = document.getElementById('statusBanner');
-  banner.className = 'status-banner status-' + data.overall_status;
-  banner.textContent = STATUS_TEXT[data.overall_status] || "Unknown status";
+  const greetingEl = document.getElementById('greeting');
+  if (data.active_window === 'morning') {
+    greetingEl.textContent = '☀️ Good morning!';
+  } else if (data.active_window === 'afternoon') {
+    greetingEl.textContent = '👋 Welcome back!';
+  } else {
+    greetingEl.textContent = '';
+  }
+
+  const a = data.alerts;
+  let alertsHtml = '';
+  if (a.has_critical_alerts) {
+    alertsHtml += a.critical_alerts.map(alert =>
+      `<div class="alert-item">${alert.line}: ${(alert.alert_text || '').replace(/<[^>]*>/g, '') || Object.entries(alert.flags).filter(([k,v]) => v).map(([k]) => k).join(', ')}</div>`
+    ).join('');
+  }
+  if (a.has_recent_advisories) {
+    alertsHtml += a.recent_advisories.map(adv =>
+      `<div class="alert-item">${adv.line}: ${adv.advisory_text.replace(/<[^>]*>/g, '')}</div>`
+    ).join('');
+  }
+  document.getElementById('alertsStandalone').innerHTML = alertsHtml;
 
   const commuteCard = document.getElementById('commuteCard');
   const c = data.commute;
 
-  if (!data.active_window || c.error) {
-    commuteCard.classList.remove('leave-now');
-    document.getElementById('commuteContent').innerHTML =
-      `<div class="inactive-window">No active commute right now</div>`;
+  if (!data.active_window) {
+    commuteCard.style.display = 'none';
   } else {
+    commuteCard.style.display = '';
     commuteCard.classList.toggle('leave-now', !!c.leave_now);
 
     const totalDelayTag = c.total_delay_minutes > 0
@@ -254,7 +280,6 @@ function render(data) {
       commuteHtml += `
         <div class="transfer-info">
           <div>Direct train — no transfer needed</div>
-          <div>Arrive: ${c.actual_arrival_time}${c.actual_arrival_time !== c.arrival_time ? ` (scheduled ${c.arrival_time})` : ''}</div>
         </div>
       `;
     }
@@ -264,36 +289,19 @@ function render(data) {
 
   const w = data.weather;
   let weatherHtml = `
-    <div class="weather-temp">${Math.round(w.high_f)}° / ${Math.round(w.low_f)}°</div>
+    <div class="weather-temp">${Math.round(w.current_temp_f)}° now · ${Math.round(w.high_f)}° / ${Math.round(w.low_f)}°</div>
     <div class="weather-condition">${w.condition}</div>
-    <div class="attire">${w.attire_suggestion}</div>
   `;
+  if (w.precip_chance >= 20) {
+    weatherHtml += `<div class="commute-warning">🌧️ ${w.precip_chance}% chance of rain</div>`;
+  }
+  weatherHtml += `<div class="attire">${w.attire_suggestion}</div>`;
   if (w.commute_warnings && w.commute_warnings.length > 0) {
     weatherHtml += w.commute_warnings.map(warn =>
       `<div class="commute-warning">⚠️ ${warn}</div>`
     ).join('');
   }
   document.getElementById('weatherContent').innerHTML = weatherHtml;
-
-  const a = data.alerts;
-  let alertsHtml = '';
-  if (a.has_critical_alerts) {
-    alertsHtml += a.critical_alerts.map(alert =>
-      `<div class="alert-item">${alert.line}: ${Object.entries(alert.flags).filter(([k,v]) => v).map(([k]) => k).join(', ')}</div>`
-    ).join('');
-  }
-  if (a.has_recent_advisories) {
-    alertsHtml += a.recent_advisories.map(adv =>
-      `<div class="alert-item">${adv.line}: ${adv.advisory_text.replace(/<[^>]*>/g, '')}</div>`
-    ).join('');
-  }
-  if (!alertsHtml) {
-    alertsHtml = '<div class="no-alerts">No active alerts on your lines</div>';
-  }
-  document.getElementById('alertsContent').innerHTML = alertsHtml;
-
-  document.getElementById('lastUpdated').textContent =
-    'Last updated: ' + new Date().toLocaleTimeString();
 }
 
 scheduleNextFetch();

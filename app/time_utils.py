@@ -1,6 +1,6 @@
 """Small time-parsing/formatting helpers shared across modules."""
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 
 
 def parse_time(t: str) -> datetime:
