@@ -2,70 +2,187 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Morning Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Good Morning Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    background: #111;
-    color: #eee;
-    font-family: -apple-system, 'Segoe UI', Roboto, sans-serif;
-    padding: 24px;
-    min-height: 100vh;
-  }
-  
-  .greeting {
-    text-align: center;
-    font-size: 1.4rem;
-    font-weight: 500;
-    color: #bbb;
-    margin-bottom: 8px;
+  :root {
+    --bg: #232946;
+    --surface: #2E3454;
+    --surface-alt: #3B4368;
+    --accent-warm: #F1A661;
+    --accent-cool: #8AB6D6;
+    --accent-rust: #C1666B;
+    --accent-sage: #8FBF9F;
+    --text-primary: #F5EFE6;
+    --text-muted: #9A93B3;
+    --font-display: 'Fraunces', Georgia, serif;
+    --font-body: 'Space Grotesk', -apple-system, sans-serif;
   }
 
-  .grid {
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+  }
+
+  .dashboard {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
+    grid-template-columns: 1fr 1.2fr;
+    grid-template-rows: 1fr auto;
+    grid-template-areas:
+      "left right"
+      "footer footer";
+    gap: 16px;
+    height: 100vh;
+    padding: 16px;
   }
+
+  .left-col {
+    grid-area: left;
+    display: grid;
+    grid-template-rows: 30% 70%;
+    gap: 16px;
+    min-height: 0;
+  }
+
+  .right-col {
+    grid-area: right;
+    display: grid;
+    grid-template-rows: 1fr 1fr;
+    gap: 16px;
+    min-height: 0;
+  }
+
   .card {
-    background: #1e1e1e;
-    border-radius: 16px;
-    padding: 24px;
+    background: var(--surface);
+    border-radius: 20px;
+    padding: 28px;
     transition: box-shadow 0.4s ease;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
   }
+
   .card.leave-now {
-    box-shadow: 0 0 0 3px #e65100;
-    animation: pulse 1.5s infinite;
+    box-shadow: 0 0 0 3px var(--accent-warm);
+    animation: pulse 1.8s infinite;
   }
   @keyframes pulse {
-    0%, 100% { box-shadow: 0 0 0 3px #e65100; }
-    50% { box-shadow: 0 0 0 6px #ff8a4c; }
+    0%, 100% { box-shadow: 0 0 0 3px var(--accent-warm); }
+    50% { box-shadow: 0 0 0 7px rgba(241, 166, 97, 0.35); }
   }
-  .card h2 {
-    font-size: 1.1rem;
+
+  .eyebrow {
+    font-family: var(--font-body);
+    font-size: 0.8rem;
+    font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: #999;
-    margin-bottom: 16px;
+    letter-spacing: 0.12em;
+    color: var(--accent-cool);
+    margin-bottom: 14px;
+  }
+
+  .clock-card {
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+  .greeting {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+    min-height: 1.4em;
+  }
+  .clock {
+    font-family: var(--font-body);
+    font-size: clamp(2.4rem, 7vw, 3.6rem);
+    font-weight: 700;
+    letter-spacing: 1px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+  }
+  .clock .ampm {
+    font-size: 0.4em;
+    font-weight: 600;
+    color: var(--accent-warm);
+    margin-left: 6px;
+  }
+  .date-line {
+    font-family: var(--font-body);
+    font-size: 1rem;
+    color: var(--text-muted);
+    margin-top: 8px;
+  }
+
+  .calendar-card {
+    flex: 1;
+  }
+  .calendar-card h2 {
+    font-family: var(--font-display);
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .calendar-placeholder {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--text-muted);
+    gap: 10px;
+  }
+  .calendar-placeholder .placeholder-icon {
+    font-size: 2.4rem;
+    opacity: 0.6;
+  }
+  .calendar-placeholder .placeholder-text {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    color: var(--text-muted);
+  }
+
+  .commute-card h2, .weather-card h2 {
+    font-family: var(--font-display);
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin-bottom: 6px;
   }
   .big-time {
-    font-size: 3rem;
+    font-family: var(--font-body);
+    font-size: clamp(1.8rem, 4vw, 2.6rem);
     font-weight: 700;
+    margin-top: 6px;
   }
   .sub-time {
-    font-size: 1.2rem;
-    color: #999;
+    font-size: 1rem;
+    color: var(--text-muted);
     margin-top: 4px;
   }
   .leave-by-line {
-    font-size: 1.3rem;
+    font-size: 1.2rem;
     margin-top: 12px;
     font-weight: 600;
   }
   .leave-by-line.urgent {
-    color: #ffb74d;
+    color: var(--accent-warm);
   }
   .tag-row {
-    margin-top: 8px;
+    margin-top: 10px;
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
@@ -74,103 +191,158 @@
     display: inline-block;
     padding: 4px 12px;
     border-radius: 20px;
-    font-size: 0.9rem;
+    font-size: 0.85rem;
     font-weight: 600;
   }
-  .error-msg { text-align: center; color: #ff8a80; font-size: 1rem; margin-bottom: 12px; }
-  .delay-ontime { background: #1b5e20; color: #c8e6c9; }
-  .delay-minor { background: #8a6d00; color: #fff3c4; }
-  .delay-late { background: #e65100; color: #ffe0b2; }
+  .delay-ontime { background: rgba(143, 191, 159, 0.18); color: var(--accent-sage); }
+  .delay-minor { background: rgba(241, 166, 97, 0.18); color: var(--accent-warm); }
+  .delay-late { background: rgba(193, 102, 107, 0.22); color: var(--accent-rust); }
+
+  .transfer-info {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--surface-alt);
+  }
+  .transfer-info div {
+    margin-bottom: 5px;
+    color: var(--text-muted);
+    font-size: 0.95rem;
+  }
+  .inactive-window {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--text-muted);
+    font-family: var(--font-display);
+    font-size: 1.2rem;
+  }
 
   .weather-temp {
-    font-size: 3rem;
+    font-family: var(--font-body);
+    font-size: clamp(1.8rem, 4vw, 2.6rem);
     font-weight: 700;
+    margin-top: 6px;
   }
   .weather-condition {
-    font-size: 1.2rem;
-    color: #ccc;
+    font-size: 1.1rem;
+    color: var(--text-muted);
     margin-top: 4px;
   }
   .attire {
-    margin-top: 16px;
-    font-size: 1.4rem;
+    margin-top: 14px;
+    font-size: 1.2rem;
   }
   .commute-warning {
-    margin-top: 16px;
+    margin-top: 14px;
     padding: 10px 14px;
-    background: #b71c1c;
+    background: rgba(193, 102, 107, 0.22);
+    color: var(--accent-rust);
     border-radius: 10px;
-    font-size: 1rem;
-  }
-  .alert-item {
-    background: #b71c1c;
-    padding: 12px 16px;
-    border-radius: 12px;
-    margin-top: 10px;
-  }
-  .no-alerts {
-    color: #4caf50;
-    font-size: 1.1rem;
-  }
-  .transfer-info {
-    margin-top: 16px;
-    padding-top: 16px;
-    border-top: 1px solid #333;
-  }
-  .transfer-info div {
-    margin-bottom: 6px;
-    color: #bbb;
-  }
-  .inactive-window {
-    text-align: center;
-    color: #666;
-    font-size: 1.3rem;
-    padding: 40px 0;
-  }
-  .last-updated {
-    text-align: center;
-    color: #555;
-    margin-top: 20px;
-    font-size: 0.9rem;
+    font-size: 0.95rem;
   }
 
-  .clock {
-  text-align: center;
-  font-size: 7rem;
-  font-weight: 700;
-  letter-spacing: 3px;
-  font-variant-numeric: tabular-nums;
-  margin-bottom: 8px;
+  .footer-strip {
+    grid-area: footer;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 0 4px;
+  }
+  .alert-item {
+    background: rgba(193, 102, 107, 0.22);
+    color: var(--accent-rust);
+    padding: 8px 16px;
+    border-radius: 10px;
+    font-size: 0.9rem;
+    font-weight: 500;
+  }
+  .error-pill {
+    background: rgba(193, 102, 107, 0.22);
+    color: var(--accent-rust);
+    padding: 8px 16px;
+    border-radius: 10px;
+    font-size: 0.9rem;
+  }
+  
+  @media (max-height: 650px) {
+  .dashboard { gap: 10px; padding: 10px; }
+  .card { padding: 14px; border-radius: 14px; }
+  .eyebrow { font-size: 0.65rem; margin-bottom: 6px; }
+  .greeting { font-size: 0.85rem; margin-bottom: 2px; }
+  .clock { font-size: clamp(1.6rem, 5.5vw, 2.2rem); }
+  .date-line { font-size: 0.75rem; margin-top: 4px; }
+  .commute-card h2, .weather-card h2, .calendar-card h2 { font-size: 1rem; margin-bottom: 2px; }
+  .big-time, .weather-temp { font-size: clamp(1.2rem, 4.5vw, 1.6rem); margin-top: 2px; }
+  .sub-time, .weather-condition { font-size: 0.75rem; margin-top: 2px; }
+  .leave-by-line { font-size: 0.85rem; margin-top: 6px; }
+  .tag-row { margin-top: 6px; gap: 6px; }
+  .delay-tag { padding: 2px 8px; font-size: 0.7rem; }
+  .transfer-info { margin-top: 8px; padding-top: 8px; }
+  .transfer-info div { font-size: 0.72rem; margin-bottom: 2px; }
+  .attire { margin-top: 8px; font-size: 0.85rem; }
+  .commute-warning { margin-top: 6px; padding: 5px 8px; font-size: 0.72rem; }
+  .calendar-placeholder .placeholder-icon { font-size: 1.4rem; }
+  .calendar-placeholder .placeholder-text { font-size: 0.8rem; }
 }
 </style>
 </head>
 <body>
 
-<div id="clock" class="clock"></div>
+<div class="dashboard">
+  <div class="left-col">
+    <div class="card clock-card" id="clockCard">
+      <div class="greeting" id="greeting"></div>
+      <div class="clock" id="clock"></div>
+      <div class="date-line" id="dateLine"></div>
+    </div>
 
-<div id="greeting" class="greeting"></div>
-<div id="errorMsg" class="error-msg"></div>
-<div id="errorMsg" class="error-msg"></div>
-<div id="alertsStandalone"></div>
-
-<div class="grid">
-  <div class="card" id="commuteCard">
-    <h2>Commute</h2>
-    <div id="commuteContent">Loading...</div>
+    <div class="card calendar-card" id="calendarCard">
+      <div class="eyebrow">Today</div>
+      <h2>Calendar</h2>
+      <div class="calendar-placeholder" id="calendarContent">
+        <div class="placeholder-icon">📅</div>
+        <div class="placeholder-text">Calendar coming soon</div>
+      </div>
+    </div>
   </div>
 
-  <div class="card" id="weatherCard">
-    <h2>Weather</h2>
-    <div id="weatherContent">Loading...</div>
+  <div class="right-col">
+    <div class="card commute-card" id="commuteCard">
+      <div class="eyebrow">Commute</div>
+      <h2>On the way</h2>
+      <div id="commuteContent" style="display:flex; flex-direction:column; flex:1;">Loading...</div>
+    </div>
+
+    <div class="card weather-card" id="weatherCard">
+      <div class="eyebrow">Outside</div>
+      <h2>Weather</h2>
+      <div id="weatherContent">Loading...</div>
+    </div>
   </div>
 
+  <div class="footer-strip" id="footerStrip"></div>
 </div>
 
-<div class="last-updated" id="lastUpdated"></div>
-
 <script>
+const DEFAULT_POLL_INTERVAL_MS = 60000;
 
-const DEFAULT_POLL_INTERVAL_MS = 60000; // used only before the first successful fetch
+function updateClock() {
+  const now = new Date();
+  let h = now.getHours() % 12;
+  if (h === 0) h = 12;
+  const m = String(now.getMinutes()).padStart(2, '0');
+  const s = String(now.getSeconds()).padStart(2, '0');
+  const ampm = now.getHours() >= 12 ? 'PM' : 'AM';
+  document.getElementById('clock').innerHTML = `${h}:${m}:${s}<span class="ampm">${ampm}</span>`;
+  document.getElementById('dateLine').textContent =
+    now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+}
+updateClock();
+setInterval(updateClock, 1000);
 
 function scheduleNextFetch() {
   fetchDashboard().then((intervalMs) => {
@@ -180,13 +352,13 @@ function scheduleNextFetch() {
 
 async function fetchDashboard() {
   try {
-    document.getElementById('errorMsg').textContent = '';
     const res = await fetch('/api/dashboard');
     const data = await res.json();
     render(data);
     return data.poll_interval_ms;
   } catch (err) {
-    document.getElementById('errorMsg').textContent = "Couldn't reach the dashboard — retrying...";
+    document.getElementById('footerStrip').innerHTML =
+      `<div class="error-pill">Couldn't reach the dashboard — retrying...</div>`;
     console.error(err);
     return DEFAULT_POLL_INTERVAL_MS;
   }
@@ -198,25 +370,12 @@ function delayTagClass(minutes) {
   return 'delay-late';
 }
 
-function updateClock() {
-  const now = new Date();
-  let h = now.getHours() % 12;
-  if (h === 0) h = 12;
-  const m = String(now.getMinutes()).padStart(2, '0');
-  const s = String(now.getSeconds()).padStart(2, '0');
-  const ampm = now.getHours() >= 12 ? 'PM' : 'AM';
-  document.getElementById('clock').textContent = `${h}:${m}:${s} ${ampm}`;
-}
-
-updateClock();
-setInterval(updateClock, 1000);
-
 function render(data) {
   const greetingEl = document.getElementById('greeting');
   if (data.active_window === 'morning') {
-    greetingEl.textContent = '☀️ Good morning!';
+    greetingEl.textContent = 'Good morning';
   } else if (data.active_window === 'afternoon') {
-    greetingEl.textContent = '👋 Welcome back!';
+    greetingEl.textContent = 'Welcome back';
   } else {
     greetingEl.textContent = '';
   }
@@ -233,7 +392,7 @@ function render(data) {
       `<div class="alert-item">${adv.line}: ${adv.advisory_text.replace(/<[^>]*>/g, '')}</div>`
     ).join('');
   }
-  document.getElementById('alertsStandalone').innerHTML = alertsHtml;
+  document.getElementById('footerStrip').innerHTML = alertsHtml;
 
   const commuteCard = document.getElementById('commuteCard');
   const c = data.commute;
@@ -251,11 +410,11 @@ function render(data) {
     const leaveByClass = (c.leave_now || c.minutes_until_leave_by < 0) ? 'leave-by-line urgent' : 'leave-by-line';
     let leaveByText;
     if (c.already_departed) {
-      leaveByText = `🚫 Missed this train's ideal leave-by window`;
+      leaveByText = `Missed this train's ideal leave-by window`;
     } else if (c.leave_now) {
-      leaveByText = `🏃 Leave now! (${c.leave_by_time})`;
+      leaveByText = `Leave now! (${c.leave_by_time})`;
     } else if (c.minutes_until_leave_by < 0) {
-      leaveByText = `⏰ Leave-by was ${c.leave_by_time} (running behind)`;
+      leaveByText = `Leave-by was ${c.leave_by_time} (running behind)`;
     } else {
       leaveByText = `Leave by ${c.leave_by_time} (in ${c.minutes_until_leave_by} min)`;
     }
@@ -270,7 +429,7 @@ function render(data) {
     if (c.trip_type === 'transfer') {
       commuteHtml += `
         <div class="transfer-info">
-          <div>🔄 Transfer at ${c.connection_station}</div>
+          <div>Transfer at ${c.connection_station}</div>
           <div>Connecting train ${c.connection_train} (${c.connection_line}) at ${c.connection_departure_time}${c.connection_delay_minutes > 0 ? ` (+${c.connection_delay_minutes} min)` : ''}</div>
           <div>Transfer buffer: ${Math.round(c.transfer_buffer_minutes)} min</div>
           <div>Arrive: ${c.actual_arrival_time}${c.actual_arrival_time !== c.arrival_time ? ` (scheduled ${c.arrival_time})` : ''}</div>
@@ -280,6 +439,7 @@ function render(data) {
       commuteHtml += `
         <div class="transfer-info">
           <div>Direct train — no transfer needed</div>
+          <div>Arrive: ${c.actual_arrival_time}${c.actual_arrival_time !== c.arrival_time ? ` (scheduled ${c.arrival_time})` : ''}</div>
         </div>
       `;
     }
@@ -293,12 +453,12 @@ function render(data) {
     <div class="weather-condition">${w.condition}</div>
   `;
   if (w.precip_chance >= 20) {
-    weatherHtml += `<div class="commute-warning">🌧️ ${w.precip_chance}% chance of rain</div>`;
+    weatherHtml += `<div class="commute-warning">${w.precip_chance}% chance of rain</div>`;
   }
   weatherHtml += `<div class="attire">${w.attire_suggestion}</div>`;
   if (w.commute_warnings && w.commute_warnings.length > 0) {
     weatherHtml += w.commute_warnings.map(warn =>
-      `<div class="commute-warning">⚠️ ${warn}</div>`
+      `<div class="commute-warning">${warn}</div>`
     ).join('');
   }
   document.getElementById('weatherContent').innerHTML = weatherHtml;
