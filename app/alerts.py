@@ -25,7 +25,7 @@ def get_alerts() -> dict:
         is_advisory = r.get("isadvisory") == "Yes"
         recent = is_recent(r.get("last_updated", ""), days=ADVISORY_RECENCY_DAYS)
 
-        if any(flags.values()):
+        if any(flags.values()) and recent:
             critical_alerts.append({
                 "line": r.get("route_name"),
                 "flags": flags,

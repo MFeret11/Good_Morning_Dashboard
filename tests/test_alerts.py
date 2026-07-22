@@ -56,8 +56,9 @@ class TestAlertFiltering:
 class TestCriticalAlerts:
     @patch("app.alerts.requests.get")
     def test_delay_flag_produces_critical_alert(self, mock_get):
+        recent_date = datetime.now().strftime("%b %d %Y %I:%M%p")
         mock_get.return_value = mock_response([
-            make_alert("Media/Wawa", isdelays="Y"),
+            make_alert("Media/Wawa", isdelays="Y", last_updated=recent_date),
         ])
         result = get_alerts()
         assert result["has_critical_alerts"] is True
@@ -65,12 +66,24 @@ class TestCriticalAlerts:
 
     @patch("app.alerts.requests.get")
     def test_suspended_flag_produces_critical_alert(self, mock_get):
+        recent_date = datetime.now().strftime("%b %d %Y %I:%M%p")
         mock_get.return_value = mock_response([
-            make_alert("Manayunk/Norristown", issuspended="Y"),
+            make_alert("Manayunk/Norristown", issuspended="Y", last_updated=recent_date),
         ])
         result = get_alerts()
         assert result["has_critical_alerts"] is True
         assert result["critical_alerts"][0]["flags"]["suspended"] is True
+
+    @patch("app.alerts.requests.get")
+    def test_stale_critical_flag_is_excluded(self, mock_get):
+        # Regression guard: critical_alerts used to have no recency check at
+        # all, so a stuck/stale flag would show forever. This confirms it's
+        # correctly filtered now, same as advisories already were.
+        mock_get.return_value = mock_response([
+            make_alert("Media/Wawa", isalert="Y", last_updated="Jan 1 2020  9:00AM"),
+        ])
+        result = get_alerts()
+        assert result["has_critical_alerts"] is False
 
 
 class TestAdvisories:

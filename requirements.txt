@@ -3,3 +3,5 @@ uvicorn[standard]
 apscheduler
 requests
 python-dotenv
+icalendar
+recurring-ical-events

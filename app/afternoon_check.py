@@ -34,10 +34,10 @@ def build_afternoon_message(commute: dict, alerts: dict) -> tuple[str, str, str,
     if commute.get("at_risk"):
         return (
             "Tight connection today",
-            f"Train {commute['origin_train']} is running {commute['origin_delay_minutes']} min "
-            f"late, leaving only ~{round(commute['transfer_buffer_minutes'])} min to make your "
-            f"connection at {commute.get('connection_station', 'the transfer point')}. "
-            f"Leave by {commute['leave_by_time']} if you're going for it.",
+            f"Train {commute['origin_train']} departs {commute['origin_actual_departure_time']}, "
+            f"running {commute['origin_delay_minutes']} min late - only ~"
+            f"{round(commute['transfer_buffer_minutes'])} min to make your connection at "
+            f"{commute.get('connection_station', 'the transfer point')}.",
             "high",
             ["warning"],
         )
@@ -45,7 +45,8 @@ def build_afternoon_message(commute: dict, alerts: dict) -> tuple[str, str, str,
     if commute.get("delayed"):
         return (
             "Running behind today",
-            f"Your commute is about {commute['total_delay_minutes']} min delayed overall. "
+            f"Train {commute['origin_train']} departed {commute['origin_actual_departure_time']}, "
+            f"running {commute['total_delay_minutes']} min behind overall. "
             f"Expected arrival: {commute['actual_arrival_time']} (scheduled {commute['arrival_time']}). "
             f"Might be worth waiting it out if you're comfortable where you are.",
             "default",
@@ -54,8 +55,8 @@ def build_afternoon_message(commute: dict, alerts: dict) -> tuple[str, str, str,
 
     return (
         "Commute looks good",
-        f"Train {commute['origin_train']} on time. Leave by {commute['leave_by_time']} "
-        f"to catch it, arriving {commute['actual_arrival_time']}.",
+        f"Train {commute['origin_train']} departs {commute['origin_actual_departure_time']}, "
+        f"on time, arriving {commute['actual_arrival_time']}.",
         "default",
         ["white_check_mark"],
     )

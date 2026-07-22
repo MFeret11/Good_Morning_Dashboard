@@ -93,3 +93,11 @@ SEVERE_CODES = {
     95: "Thunderstorm", 96: "Thunderstorm with slight hail", 99: "Thunderstorm with heavy hail",
     71: "Slight snow", 73: "Moderate snow", 75: "Heavy snow",
 }
+
+# --- Calendar ---
+# CALENDAR_ICS_URL must be set via environment variable (.env file) - same
+# reasoning as NTFY_TOPIC: this file gets committed to git and the URL acts
+# like a shared secret (anyone who has it can read the calendar's contents).
+# Google Calendar -> Settings -> your calendar -> "Secret address in iCal
+# format". Read-only, no OAuth setup needed.
+CALENDAR_ICS_URL = os.environ.get("CALENDAR_ICS_URL")

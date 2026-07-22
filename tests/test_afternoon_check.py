@@ -6,6 +6,7 @@ def make_commute(**overrides):
         "trip_type": "transfer",
         "origin_train": "2453",
         "origin_delay_minutes": 0,
+        "origin_actual_departure_time": "5:03PM",
         "leave_by_time": "5:48PM",
         "arrival_time": "7:19PM",
         "actual_arrival_time": "7:19PM",
@@ -54,7 +55,7 @@ class TestBuildAfternoonMessage:
         title, message, priority, tags = build_afternoon_message(commute, make_alerts())
         assert priority == "high"
         assert "20" in message  # delay minutes mentioned
-        assert commute["leave_by_time"] in message
+        assert commute["origin_actual_departure_time"] in message
 
     def test_delayed_but_not_at_risk_produces_default_priority(self):
         commute = make_commute(delayed=True, total_delay_minutes=17,

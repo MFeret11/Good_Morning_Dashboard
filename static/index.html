@@ -108,7 +108,7 @@
   }
   .clock {
     font-family: var(--font-body);
-    font-size: clamp(2.4rem, 9vw, 9.0rem);
+    font-size: clamp(2.0rem, 9vw, 9.0rem);
     font-weight: 500;
     letter-spacing: 1px;
     font-variant-numeric: tabular-nums;
@@ -154,6 +154,46 @@
     font-family: var(--font-display);
     font-size: 1.1rem;
     color: var(--text-muted);
+  }
+  .calendar-list {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .calendar-event {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--surface-alt);
+  }
+  .calendar-event:last-child { border-bottom: none; }
+  .calendar-event-time {
+    font-family: var(--font-body);
+    font-weight: 600;
+    color: var(--accent-cool);
+    font-size: 0.9rem;
+    min-width: 70px;
+    flex-shrink: 0;
+  }
+  .calendar-event.all-day .calendar-event-time {
+    color: var(--accent-warm);
+  }
+  .calendar-event-title {
+    font-size: 1rem;
+    color: var(--text-primary);
+  }
+  .calendar-empty {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-family: var(--font-display);
+    font-size: 1.05rem;
+    text-align: center;
   }
 
   .commute-card h2, .weather-card h2 {
@@ -259,6 +299,7 @@
     border-radius: 10px;
     font-size: 0.9rem;
     font-weight: 500;
+    cursor: pointer;
   }
   .error-pill {
     background: rgba(193, 102, 107, 0.22);
@@ -267,27 +308,6 @@
     border-radius: 10px;
     font-size: 0.9rem;
   }
-
-  @media (max-height: 650px) {
-  .dashboard { gap: 10px; padding: 10px; }
-  .card { padding: 14px; border-radius: 14px; }
-  .eyebrow { font-size: 0.65rem; margin-bottom: 6px; }
-  .greeting { font-size: 0.85rem; margin-bottom: 2px; }
-  .clock { font-size: clamp(3.0rem, 9.0vw, 4.0rem); }
-  .date-line { font-size: 0.75rem; margin-top: 4px; }
-  .commute-card h2, .weather-card h2, .calendar-card h2 { font-size: 1rem; margin-bottom: 2px; }
-  .big-time, .weather-temp { font-size: clamp(1.2rem, 4.5vw, 1.6rem); margin-top: 2px; }
-  .sub-time, .weather-condition { font-size: 0.75rem; margin-top: 2px; }
-  .leave-by-line { font-size: 0.85rem; margin-top: 6px; }
-  .tag-row { margin-top: 6px; gap: 6px; }
-  .delay-tag { padding: 2px 8px; font-size: 0.7rem; }
-  .transfer-info { margin-top: 8px; padding-top: 8px; }
-  .transfer-info div { font-size: 0.72rem; margin-bottom: 2px; }
-  .attire { margin-top: 8px; font-size: 0.85rem; }
-  .commute-warning { margin-top: 6px; padding: 5px 8px; font-size: 0.72rem; }
-  .calendar-placeholder .placeholder-icon { font-size: 1.4rem; }
-  .calendar-placeholder .placeholder-text { font-size: 0.8rem; }
-}
 </style>
 </head>
 <body>
@@ -380,72 +400,109 @@ function render(data) {
     greetingEl.textContent = '';
   }
 
+  function getSeenAlertKeys() {
+    try {
+      return new Set(JSON.parse(localStorage.getItem('seenAlertKeys') || '[]'));
+    } catch {
+      return new Set();
+    }
+  }
+
+  function markAlertSeen(key) {
+    const seen = getSeenAlertKeys();
+    seen.add(key);
+    localStorage.setItem('seenAlertKeys', JSON.stringify([...seen]));
+  }
+
   const a = data.alerts;
-  let alertsHtml = '';
+  const seenKeys = getSeenAlertKeys();
+  const currentEntries = [];
+
   if (a.has_critical_alerts) {
-    alertsHtml += a.critical_alerts.map(alert =>
-      `<div class="alert-item">${alert.line}: ${(alert.alert_text || '').replace(/<[^>]*>/g, '') || Object.entries(alert.flags).filter(([k,v]) => v).map(([k]) => k).join(', ')}</div>`
-    ).join('');
+    a.critical_alerts.forEach(alert => {
+      currentEntries.push({
+        key: `${alert.line}|${alert.last_updated}`,
+        text: `${alert.line}: ${(alert.alert_text || '').replace(/<[^>]*>/g, '') || Object.entries(alert.flags).filter(([k,v]) => v).map(([k]) => k).join(', ')}`
+      });
+    });
   }
   if (a.has_recent_advisories) {
-    alertsHtml += a.recent_advisories.map(adv =>
-      `<div class="alert-item">${adv.line}: ${adv.advisory_text.replace(/<[^>]*>/g, '')}</div>`
-    ).join('');
+    a.recent_advisories.forEach(adv => {
+      currentEntries.push({
+        key: `${adv.line}|${adv.last_updated}`,
+        text: `${adv.line}: ${adv.advisory_text.replace(/<[^>]*>/g, '')}`
+      });
+    });
   }
+
+  document.getElementById('footerStrip').innerHTML = currentEntries
+    .filter(e => !seenKeys.has(e.key))
+    .map(e => `<div class="alert-item" data-alert-key="${escapeHtml(e.key)}">${escapeHtml(e.text)}</div>`)
+    .join('');
+
+  document.querySelectorAll('.alert-item').forEach(el => {
+    el.addEventListener('click', () => {
+      markAlertSeen(el.getAttribute('data-alert-key'));
+      el.remove();
+    });
+  });
+
+  const alertsHtml = currentEntries.filter(e => !seenKeys.has(e.key)).map(e => e.html).join('');
   document.getElementById('footerStrip').innerHTML = alertsHtml;
+  localStorage.setItem('seenAlertKeys', JSON.stringify(currentEntries.map(e => e.key)));
 
   const commuteCard = document.getElementById('commuteCard');
   const c = data.commute;
 
-  if (!data.active_window) {
-    commuteCard.style.display = 'none';
-  } else {
-    commuteCard.style.display = '';
-    commuteCard.classList.toggle('leave-now', !!c.leave_now);
-
-    const totalDelayTag = c.total_delay_minutes > 0
-      ? `<span class="delay-tag ${delayTagClass(c.total_delay_minutes)}">${c.total_delay_minutes} min behind schedule</span>`
-      : `<span class="delay-tag delay-ontime">On time</span>`;
-
-    const leaveByClass = (c.leave_now || c.minutes_until_leave_by < 0) ? 'leave-by-line urgent' : 'leave-by-line';
-    let leaveByText;
-    if (c.already_departed) {
-      leaveByText = `Missed this train's ideal leave-by window`;
-    } else if (c.leave_now) {
-      leaveByText = `Leave now! (${c.leave_by_time})`;
-    } else if (c.minutes_until_leave_by < 0) {
-      leaveByText = `Leave-by was ${c.leave_by_time} (running behind)`;
+    if (!data.active_window) {
+      commuteCard.style.display = 'none';
     } else {
-      leaveByText = `Leave by ${c.leave_by_time} (in ${c.minutes_until_leave_by} min)`;
-    }
+      commuteCard.style.display = '';
+      commuteCard.classList.toggle('leave-now', !!c.leave_now);
 
-    let commuteHtml = `
-      <div class="big-time">${c.origin_actual_departure_time}</div>
-      <div class="sub-time">Scheduled ${c.origin_departure_time} · Train ${c.origin_train} (${c.origin_line})</div>
-      <div class="${leaveByClass}">${leaveByText}</div>
-      <div class="tag-row">${totalDelayTag}</div>
-    `;
+      const totalDelayTag = c.total_delay_minutes > 0
+        ? `<span class="delay-tag ${delayTagClass(c.total_delay_minutes)}">${c.total_delay_minutes} min behind schedule</span>`
+        : `<span class="delay-tag delay-ontime">On time</span>`;
 
-    if (c.trip_type === 'transfer') {
-      commuteHtml += `
-        <div class="transfer-info">
-          <div>Transfer at ${c.connection_station}</div>
-          <div>Connecting train ${c.connection_train} (${c.connection_line}) at ${c.connection_departure_time}${c.connection_delay_minutes > 0 ? ` (+${c.connection_delay_minutes} min)` : ''}</div>
-          <div>Transfer buffer: ${Math.round(c.transfer_buffer_minutes)} min</div>
-          <div>Arrive: ${c.actual_arrival_time}${c.actual_arrival_time !== c.arrival_time ? ` (scheduled ${c.arrival_time})` : ''}</div>
-        </div>
+      const leaveByClass = (c.leave_now || c.minutes_until_leave_by < 0) ? 'leave-by-line urgent' : 'leave-by-line';
+      let leaveByText;
+      if (c.already_departed) {
+        leaveByText = `Missed this train's ideal leave-by window`;
+      } else if (c.leave_now) {
+        leaveByText = `Leave now! (${c.leave_by_time})`;
+      } else if (c.minutes_until_leave_by < 0) {
+        leaveByText = `Leave-by was ${c.leave_by_time} (running behind)`;
+      } else {
+        leaveByText = `Leave by ${c.leave_by_time} (in ${c.minutes_until_leave_by} min)`;
+      }
+
+      let commuteHtml = `
+        <div class="big-time">${c.origin_actual_departure_time}</div>
+        <div class="sub-time">Scheduled ${c.origin_departure_time} · Train ${c.origin_train} (${c.origin_line})</div>
+        <div class="${leaveByClass}">${leaveByText}</div>
+        <div class="tag-row">${totalDelayTag}</div>
       `;
-    } else {
-      commuteHtml += `
-        <div class="transfer-info">
-          <div>Direct train — no transfer needed</div>
-          <div>Arrive: ${c.actual_arrival_time}${c.actual_arrival_time !== c.arrival_time ? ` (scheduled ${c.arrival_time})` : ''}</div>
-        </div>
-      `;
-    }
 
-    document.getElementById('commuteContent').innerHTML = commuteHtml;
-  }
+      if (c.trip_type === 'transfer') {
+        commuteHtml += `
+          <div class="transfer-info">
+            <div>Transfer at ${c.connection_station}</div>
+            <div>Connecting train ${c.connection_train} (${c.connection_line}) at ${c.connection_departure_time}${c.connection_delay_minutes > 0 ? ` (+${c.connection_delay_minutes} min)` : ''}</div>
+            <div>Transfer buffer: ${Math.round(c.transfer_buffer_minutes)} min</div>
+            <div>Arrive: ${c.actual_arrival_time}${c.actual_arrival_time !== c.arrival_time ? ` (scheduled ${c.arrival_time})` : ''}</div>
+          </div>
+        `;
+      } else {
+        commuteHtml += `
+          <div class="transfer-info">
+            <div>Direct train — no transfer needed</div>
+            <div>Arrive: ${c.actual_arrival_time}${c.actual_arrival_time !== c.arrival_time ? ` (scheduled ${c.arrival_time})` : ''}</div>
+          </div>
+        `;
+      }
+
+      document.getElementById('commuteContent').innerHTML = commuteHtml;
+    }
 
   const w = data.weather;
   let weatherHtml = `
@@ -462,6 +519,29 @@ function render(data) {
     ).join('');
   }
   document.getElementById('weatherContent').innerHTML = weatherHtml;
+
+  // --- Calendar card ---
+  const cal = data.calendar;
+  let calendarHtml;
+  if (cal.error) {
+    calendarHtml = `<div class="calendar-empty">${escapeHtml(cal.error)}</div>`;
+  } else if (!cal.events || cal.events.length === 0) {
+    calendarHtml = `<div class="calendar-empty">Nothing on the calendar today</div>`;
+  } else {
+    calendarHtml = '<div class="calendar-list">' + cal.events.map(ev => `
+      <div class="calendar-event${ev.all_day ? ' all-day' : ''}">
+        <div class="calendar-event-time">${ev.all_day ? 'All day' : ev.start_time}</div>
+        <div class="calendar-event-title">${escapeHtml(ev.title)}</div>
+      </div>
+    `).join('') + '</div>';
+  }
+  document.getElementById('calendarContent').innerHTML = calendarHtml;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
 }
 
 scheduleNextFetch();
