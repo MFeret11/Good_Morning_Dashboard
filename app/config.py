@@ -23,6 +23,13 @@ RISK_BUFFER_MINUTES = 0  # transfer buffer below this is flagged "at_risk"
 SIGNIFICANT_DELAY_MINUTES = 10  # total trip delay above this is flagged "delayed"
 LEAVE_NOW_THRESHOLD_MINUTES = 3  # minutes_until_leave_by below this (incl. negative) = urgent
 PREFERRED_TRANSFER_STATION = "Jefferson Station"
+
+# --- Afternoon commute: anchored to a known train, not "soonest available" ---
+# Matt/his girlfriend always take the same ~4:50pm train from East Falls, so
+# the afternoon commute logic below searches for the SEPTA result closest to
+# this target time rather than blindly picking the next train in the list.
+AFTERNOON_TARGET_DEPARTURE_TIME = "4:50PM"
+
 # Manually-stitched transfer buffer below this = the connecting train has
 # effectively already left before the rider's train arrives (not just tight,
 # genuinely not catchable). Below this floor, get_commute_leg() falls back

@@ -186,3 +186,61 @@ def get_commute_leg(origin: str, destination: str) -> dict:
 
     chosen = results[0]
     return _build_transfer_trip(chosen, walk_time, alternatives=results)
+
+def _pick_closest_to_target(results: list, target_time_str: str) -> dict:
+    """Picks the result whose departure time is closest to a known target
+    (e.g. "the ~4:50pm train we always take"), rather than the soonest
+    upcoming one - SEPTA's list may include earlier trains that aren't the
+    one actually being ridden."""
+    target = parse_time(target_time_str)
+    return min(results, key=lambda r: abs((parse_time(r["orig_departure_time"]) - target).total_seconds()))
+
+
+def get_afternoon_commute(origin: str, transfer_station: str, destination: str, target_departure_time: str) -> dict:
+    """Anchors to the specific known afternoon train (target_departure_time)
+    from origin instead of SEPTA's soonest-next pick, and applies live delay
+    data to both legs. If the connection can't realistically be made, does
+    NOT silently fall back to SEPTA's own pick (unlike get_commute_leg) -
+    instead returns the next realistic leg2 option, flagged as missed, so
+    the rider knows their usual train isn't going to make it."""
+    walk_time = WALK_TIMES.get(origin, DEFAULT_WALK_TIME_MINUTES)
+
+    leg1_results = _fetch_trips(origin, transfer_station)
+    if not leg1_results:
+        return {"error": "No trips found for origin leg"}
+    leg1 = _pick_closest_to_target(leg1_results, target_departure_time)
+
+    leg1_delay = parse_delay_minutes(leg1["orig_delay"])
+    leg1_actual_arrival = parse_time(leg1["orig_arrival_time"])  
+    timedelta(minutes=leg1_delay)
+
+    leg2_results = _fetch_trips(transfer_station, destination)
+    if not leg2_results:
+        return {"error": "No trips found for transfer leg"}
+
+    catchable = [
+        leg2 for leg2 in leg2_results
+        if (parse_time(leg2["orig_departure_time"]) - leg1_actual_arrival).total_seconds() / 60
+        >= MISSED_CONNECTION_BUFFER_MINUTES
+    ]
+    missed_connection = not catchable
+    leg2_chosen = catchable[0] if catchable else leg2_results[0]
+
+    chosen = {
+        "orig_train": leg1["orig_train"],
+        "orig_line": leg1["orig_line"],
+        "orig_departure_time": leg1["orig_departure_time"],
+        "orig_delay": leg1["orig_delay"],
+        "orig_arrival_time": leg1["orig_arrival_time"],
+        "term_train": leg2_chosen["orig_train"],
+        "term_line": leg2_chosen["orig_line"],
+        "term_depart_time": leg2_chosen["orig_departure_time"],
+        "term_delay": leg2_chosen["orig_delay"],
+        "term_arrival_time": leg2_chosen["orig_arrival_time"],
+        "Connection": transfer_station,
+        "isdirect": "false",
+    }
+
+    trip = _build_transfer_trip(chosen, walk_time, alternatives=leg2_results)
+    trip["missed_connection"] = missed_connection
+    return trip

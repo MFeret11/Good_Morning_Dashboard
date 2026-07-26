@@ -8,12 +8,14 @@ from app.config import (
     HOME_STATION, WORK_STATION,
     MORNING_START, MORNING_END, AFTERNOON_START, AFTERNOON_END,
     ACTIVE_POLL_INTERVAL_MS, IDLE_POLL_INTERVAL_MS,
+    AFTERNOON_TARGET_DEPARTURE_TIME,
 )
-from app.commute import get_commute_leg
+from app.commute import get_commute_leg, get_afternoon_commute
 from app.alerts import get_alerts
 from app.weather import get_weather
 from app.scheduler import start_scheduler
 from app.afternoon_check import run_afternoon_check
+from app.config import PREFERRED_TRANSFER_STATION
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -68,6 +70,8 @@ def test_notification():
 
 def get_active_window() -> str | None:
     hour = datetime.now().hour
+    if datetime.now().weekday() >= 5:  # Saturday=5, Sunday=6
+        return None
     if MORNING_START <= hour < MORNING_END:
         return "morning"
     elif AFTERNOON_START <= hour < AFTERNOON_END:
@@ -82,7 +86,7 @@ def get_dashboard():
     if window == "morning":
         commute = get_commute_leg(HOME_STATION, WORK_STATION)
     elif window == "afternoon":
-        commute = get_commute_leg(WORK_STATION, HOME_STATION)
+        commute = get_afternoon_commute(WORK_STATION, PREFERRED_TRANSFER_STATION, HOME_STATION, AFTERNOON_TARGET_DEPARTURE_TIME)
     else:
         commute = {"error": "Outside active commute windows"}
 
