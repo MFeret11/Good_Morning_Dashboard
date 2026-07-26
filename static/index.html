@@ -63,6 +63,10 @@
     min-height: 0;
   }
 
+  .right-col.no-commute {
+  grid-template-rows: 1fr;
+}
+
   .card {
     background: var(--surface);
     border-radius: 20px;
@@ -256,7 +260,6 @@ function delayTagClass(minutes) {
 }
 
 function render(data) {
-
   function getSeenAlertKeys() {
     try {
       return new Set(JSON.parse(localStorage.getItem('seenAlertKeys') || '[]'));
@@ -291,6 +294,8 @@ function render(data) {
       });
     });
   }
+
+  document.querySelector('.right-col').classList.toggle('no-commute', !data.active_window);
 
   document.getElementById('footerStrip').innerHTML = currentEntries
     .filter(e => !seenKeys.has(e.key))
