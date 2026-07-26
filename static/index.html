@@ -40,8 +40,8 @@
     grid-template-columns: 1fr 1.2fr;
     grid-template-rows: 1fr auto;
     grid-template-areas:
-      "left right"
-      "footer footer";
+      "right"
+      "footer";
     gap: 16px;
     height: 100vh;
     padding: 16px;
@@ -91,109 +91,6 @@
     letter-spacing: 0.12em;
     color: var(--accent-cool);
     margin-bottom: 14px;
-  }
-
-  .clock-card {
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-  }
-  .greeting {
-    font-family: var(--font-display);
-    font-size: 1.1rem;
-    font-weight: 500;
-    color: var(--text-muted);
-    margin-bottom: 6px;
-    min-height: 1.4em;
-  }
-  .clock {
-    font-family: var(--font-body);
-    font-size: clamp(2.0rem, 9vw, 9.0rem);
-    font-weight: 500;
-    letter-spacing: 1px;
-    font-variant-numeric: tabular-nums;
-    color: var(--text-primary);
-  }
-  .clock .ampm {
-    font-size: 0.4em;
-    font-weight: 600;
-    color: var(--accent-warm);
-    margin-left: 6px;
-  }
-  .date-line {
-    font-family: var(--font-body);
-    font-size: 1rem;
-    color: var(--text-muted);
-    margin-top: 8px;
-  }
-
-  .calendar-card {
-    flex: 1;
-  }
-  .calendar-card h2 {
-    font-family: var(--font-display);
-    font-size: 1.4rem;
-    font-weight: 600;
-    margin-bottom: 4px;
-  }
-  .calendar-placeholder {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    color: var(--text-muted);
-    gap: 10px;
-  }
-  .calendar-placeholder .placeholder-icon {
-    font-size: 2.4rem;
-    opacity: 0.6;
-  }
-  .calendar-placeholder .placeholder-text {
-    font-family: var(--font-display);
-    font-size: 1.1rem;
-    color: var(--text-muted);
-  }
-  .calendar-list {
-    flex: 1;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .calendar-event {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--surface-alt);
-  }
-  .calendar-event:last-child { border-bottom: none; }
-  .calendar-event-time {
-    font-family: var(--font-body);
-    font-weight: 600;
-    color: var(--accent-cool);
-    font-size: 0.9rem;
-    min-width: 70px;
-    flex-shrink: 0;
-  }
-  .calendar-event.all-day .calendar-event-time {
-    color: var(--accent-warm);
-  }
-  .calendar-event-title {
-    font-size: 1rem;
-    color: var(--text-primary);
-  }
-  .calendar-empty {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--text-muted);
-    font-family: var(--font-display);
-    font-size: 1.05rem;
-    text-align: center;
   }
 
   .commute-card h2, .weather-card h2 {
@@ -313,23 +210,6 @@
 <body>
 
 <div class="dashboard">
-  <div class="left-col">
-    <div class="card clock-card" id="clockCard">
-      <div class="greeting" id="greeting"></div>
-      <div class="clock" id="clock"></div>
-      <div class="date-line" id="dateLine"></div>
-    </div>
-
-    <div class="card calendar-card" id="calendarCard">
-      <div class="eyebrow">Today</div>
-      <h2>Calendar</h2>
-      <div class="calendar-placeholder" id="calendarContent">
-        <div class="placeholder-icon">📅</div>
-        <div class="placeholder-text">Calendar coming soon</div>
-      </div>
-    </div>
-  </div>
-
   <div class="right-col">
     <div class="card commute-card" id="commuteCard">
       <div class="eyebrow">Commute</div>
@@ -338,8 +218,7 @@
     </div>
 
     <div class="card weather-card" id="weatherCard">
-      <div class="eyebrow">Outside</div>
-      <h2>Weather</h2>
+      <div class="eyebrow">Today</div>
       <div id="weatherContent">Loading...</div>
     </div>
   </div>
@@ -349,20 +228,6 @@
 
 <script>
 const DEFAULT_POLL_INTERVAL_MS = 60000;
-
-function updateClock() {
-  const now = new Date();
-  let h = now.getHours() % 12;
-  if (h === 0) h = 12;
-  const m = String(now.getMinutes()).padStart(2, '0');
-  const s = String(now.getSeconds()).padStart(2, '0');
-  const ampm = now.getHours() >= 12 ? 'PM' : 'AM';
-  document.getElementById('clock').innerHTML = `${h}:${m}:${s}<span class="ampm">${ampm}</span>`;
-  document.getElementById('dateLine').textContent =
-    now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
-}
-updateClock();
-setInterval(updateClock, 1000);
 
 function scheduleNextFetch() {
   fetchDashboard().then((intervalMs) => {
@@ -391,14 +256,6 @@ function delayTagClass(minutes) {
 }
 
 function render(data) {
-  const greetingEl = document.getElementById('greeting');
-  if (data.active_window === 'morning') {
-    greetingEl.textContent = 'Good morning';
-  } else if (data.active_window === 'afternoon') {
-    greetingEl.textContent = 'Welcome back';
-  } else {
-    greetingEl.textContent = '';
-  }
 
   function getSeenAlertKeys() {
     try {
@@ -505,37 +362,16 @@ function render(data) {
     }
 
   const w = data.weather;
-  let weatherHtml = `
-    <div class="weather-temp">${Math.round(w.current_temp_f)}° now · ${Math.round(w.high_f)}° / ${Math.round(w.low_f)}°</div>
-    <div class="weather-condition">${w.condition}</div>
-  `;
+  let weatherHtml = `<div class="attire">${w.attire_suggestion}</div>`;
   if (w.precip_chance >= 20) {
-    weatherHtml += `<div class="commute-warning">${w.precip_chance}% chance of rain</div>`;
+    weatherHtml = `<div class="commute-warning">${w.precip_chance}% chance of rain</div>` + weatherHtml;
   }
-  weatherHtml += `<div class="attire">${w.attire_suggestion}</div>`;
   if (w.commute_warnings && w.commute_warnings.length > 0) {
     weatherHtml += w.commute_warnings.map(warn =>
       `<div class="commute-warning">${warn}</div>`
     ).join('');
   }
   document.getElementById('weatherContent').innerHTML = weatherHtml;
-
-  // --- Calendar card ---
-  const cal = data.calendar;
-  let calendarHtml;
-  if (cal.error) {
-    calendarHtml = `<div class="calendar-empty">${escapeHtml(cal.error)}</div>`;
-  } else if (!cal.events || cal.events.length === 0) {
-    calendarHtml = `<div class="calendar-empty">Nothing on the calendar today</div>`;
-  } else {
-    calendarHtml = '<div class="calendar-list">' + cal.events.map(ev => `
-      <div class="calendar-event${ev.all_day ? ' all-day' : ''}">
-        <div class="calendar-event-time">${ev.all_day ? 'All day' : ev.start_time}</div>
-        <div class="calendar-event-title">${escapeHtml(ev.title)}</div>
-      </div>
-    `).join('') + '</div>';
-  }
-  document.getElementById('calendarContent').innerHTML = calendarHtml;
 }
 
 function escapeHtml(str) {

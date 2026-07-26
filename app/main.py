@@ -12,7 +12,6 @@ from app.config import (
 from app.commute import get_commute_leg
 from app.alerts import get_alerts
 from app.weather import get_weather
-from app.calendar_data import get_todays_events
 from app.scheduler import start_scheduler
 from app.afternoon_check import run_afternoon_check
 
@@ -59,11 +58,6 @@ def api_get_weather():
     return get_weather()
 
 
-@app.get("/api/calendar")
-def api_get_calendar():
-    return get_todays_events()
-
-
 @app.post("/api/test_notification")
 def test_notification():
     """Manually trigger the afternoon check/notification, for testing without
@@ -94,7 +88,6 @@ def get_dashboard():
 
     alerts = get_alerts()
     weather = get_weather()
-    calendar = get_todays_events()
 
     if alerts.get("has_critical_alerts"):
         overall_status = "alert"
@@ -115,5 +108,4 @@ def get_dashboard():
         "commute": commute_display,
         "alerts": alerts,
         "weather": weather_display,
-        "calendar": calendar,
     }
