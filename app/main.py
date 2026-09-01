@@ -1,22 +1,21 @@
+"""Headless REST API microservice for SEPTA Regional Rail and Open-Meteo commute telemetry."""
 from datetime import datetime
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from typing import Optional
+from fastapi import FastAPI, Query
 
 from app.config import (
-    HOME_STATION, WORK_STATION, PREFERRED_TRANSFER_STATION,
+    DEFAULT_HOME_STATION, DEFAULT_WORK_STATION, DEFAULT_TRANSFER_STATION,
     MORNING_START, MORNING_END, AFTERNOON_START, AFTERNOON_END,
     ACTIVE_POLL_INTERVAL_MS, IDLE_POLL_INTERVAL_MS,
     AFTERNOON_TARGET_DEPARTURE_TIME,
 )
-from app.commute import get_commute_leg, get_afternoon_commute
+from app.commute import get_commute
 from app.alerts import get_alerts
 from app.weather import get_weather
 from app.scheduler import start_scheduler
 from app.afternoon_check import run_afternoon_check
 
-app = FastAPI()
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app = FastAPI(title="Commute Telemetry Microservice", version="2.0.0")
 
 
 @app.on_event("startup")
@@ -24,25 +23,38 @@ def on_startup():
     start_scheduler()
 
 
-@app.get("/dashboard")
-def serve_dashboard():
-    return FileResponse("static/index.html")
-
-
 @app.get("/")
 def read_root():
-    return {"status": "ok", "message": "SEPTA dashboard backend running"}
+    return {
+        "status": "ok",
+        "service": "Commute Telemetry Microservice",
+        "active_window": get_active_window(),
+    }
+
+
+@app.get("/api/commute")
+def api_get_commute(
+    origin: str = Query(DEFAULT_HOME_STATION, description="Origin station name"),
+    destination: str = Query(DEFAULT_WORK_STATION, description="Destination station name"),
+    target_time: Optional[str] = Query(None, description="Target departure time (e.g. '4:50PM')"),
+    transfer: Optional[str] = Query(DEFAULT_TRANSFER_STATION, description="Preferred transfer station"),
+):
+    """Dynamic universal commute endpoint for any origin/destination pair."""
+    return get_commute(origin, destination, target_time=target_time, preferred_transfer=transfer)
 
 
 @app.get("/api/commute_morning")
 def get_commute_morning():
-    return get_commute_leg(HOME_STATION, WORK_STATION)
+    return get_commute(DEFAULT_HOME_STATION, DEFAULT_WORK_STATION)
 
 
 @app.get("/api/commute_return")
 def get_commute_return():
-    return get_afternoon_commute(
-        WORK_STATION, PREFERRED_TRANSFER_STATION, HOME_STATION, AFTERNOON_TARGET_DEPARTURE_TIME
+    return get_commute(
+        DEFAULT_WORK_STATION,
+        DEFAULT_HOME_STATION,
+        target_time=AFTERNOON_TARGET_DEPARTURE_TIME,
+        preferred_transfer=DEFAULT_TRANSFER_STATION,
     )
 
 
@@ -75,14 +87,23 @@ def get_active_window() -> str | None:
 
 
 @app.get("/api/dashboard")
-def get_dashboard():
+def get_dashboard(
+    origin: Optional[str] = None,
+    destination: Optional[str] = None,
+    target_time: Optional[str] = None,
+):
     window = get_active_window()
 
-    if window == "morning":
-        commute = get_commute_leg(HOME_STATION, WORK_STATION)
+    if origin and destination:
+        commute = get_commute(origin, destination, target_time=target_time)
+    elif window == "morning":
+        commute = get_commute(DEFAULT_HOME_STATION, DEFAULT_WORK_STATION)
     elif window == "afternoon":
-        commute = get_afternoon_commute(
-            WORK_STATION, PREFERRED_TRANSFER_STATION, HOME_STATION, AFTERNOON_TARGET_DEPARTURE_TIME
+        commute = get_commute(
+            DEFAULT_WORK_STATION,
+            DEFAULT_HOME_STATION,
+            target_time=AFTERNOON_TARGET_DEPARTURE_TIME,
+            preferred_transfer=DEFAULT_TRANSFER_STATION,
         )
     else:
         commute = {"error": "Outside active commute windows"}
@@ -90,11 +111,12 @@ def get_dashboard():
     alerts = get_alerts()
     weather = get_weather()
 
-    # Status Resolver
     if "error" in commute:
         overall_status = "error" if window else "idle"
     elif alerts.get("has_critical_alerts"):
         overall_status = "alert"
+    elif commute.get("is_cancelled") or commute.get("connection_cancelled"):
+        overall_status = "cancelled"
     elif commute.get("missed_connection"):
         overall_status = "missed_connection"
     elif commute.get("at_risk"):
