@@ -1,23 +1,16 @@
 """Builds and sends the daily afternoon commute notification.
-
-Always sends once at the scheduled time, but the message content adapts:
-- Clear conditions -> a short, reassuring status update
-- Delayed/at-risk conditions -> a more detailed warning, so she can decide
-  whether it's worth waiting in a cool office rather than rushing out.
-"""
-from app.commute import get_commute_leg
+Anchored to the ~4:50 PM East Falls train and checks the Jefferson transfer."""
+from app.commute import get_afternoon_commute
 from app.alerts import get_alerts
-from app.config import WORK_STATION, HOME_STATION
+from app.config import WORK_STATION, HOME_STATION, PREFERRED_TRANSFER_STATION, AFTERNOON_TARGET_DEPARTURE_TIME
 from app.notifications import send_notification
 
 
 def build_afternoon_message(commute: dict, alerts: dict) -> tuple[str, str, str, list[str]]:
-    """Returns (title, message, priority, tags) for the notification."""
-
     if "error" in commute:
         return (
-            "Commute check failed",
-            "Couldn't retrieve train data right now. Check the dashboard manually.",
+            "Commute Check Failed",
+            f"Could not retrieve train data: {commute['error']}. Check SEPTA manually.",
             "high",
             ["warning"],
         )
@@ -25,47 +18,62 @@ def build_afternoon_message(commute: dict, alerts: dict) -> tuple[str, str, str,
     if alerts.get("has_critical_alerts"):
         lines = ", ".join(a["line"] for a in alerts["critical_alerts"])
         return (
-            "SEPTA service alert",
-            f"There's an active alert on {lines}. Check the dashboard before you head out.",
+            "🚨 SEPTA Service Alert",
+            f"Active alerts on {lines}. Check dashboard before leaving.",
             "urgent",
             ["rotating_light"],
         )
 
+    if commute.get("missed_connection"):
+        return (
+            "🚨 Missed Connection Alert",
+            f"Train {commute['origin_train']} arrives at {commute.get('connection_station')} too late for the usual Media train. "
+            f"Next realistic arrival at Media: {commute['actual_arrival_time']}.",
+            "urgent",
+            ["warning"],
+        )
+
     if commute.get("at_risk"):
         return (
-            "Tight connection today",
-            f"Train {commute['origin_train']} departs {commute['origin_actual_departure_time']}, "
-            f"running {commute['origin_delay_minutes']} min late - only ~"
-            f"{round(commute['transfer_buffer_minutes'])} min to make your connection at "
-            f"{commute.get('connection_station', 'the transfer point')}.",
+            "⚠️ Tight Connection at Jefferson",
+            f"Train {commute['origin_train']} leaves East Falls at {commute['origin_actual_departure_time']} "
+            f"(+{commute['origin_delay_minutes']}m). Transfer window is only ~{commute['transfer_buffer_minutes']} min at Jefferson!",
             "high",
             ["warning"],
         )
 
+    # Connecting train (Media line) is significantly delayed
+    if commute.get("connection_delay_minutes", 0) >= 10:
+        return (
+            "🟡 Connecting Media Train Delayed",
+            f"Your East Falls train is on time, but connecting train {commute.get('connection_train')} at Jefferson "
+            f"is running {commute['connection_delay_minutes']} min late. Expected home: {commute['actual_arrival_time']}.",
+            "default",
+            ["hourglass"],
+        )
+
     if commute.get("delayed"):
         return (
-            "Running behind today",
-            f"Train {commute['origin_train']} departed {commute['origin_actual_departure_time']}, "
-            f"running {commute['total_delay_minutes']} min behind overall. "
-            f"Expected arrival: {commute['actual_arrival_time']} (scheduled {commute['arrival_time']}). "
-            f"Might be worth waiting it out if you're comfortable where you are.",
+            "🟡 Commute Running Behind",
+            f"Departing East Falls at {commute['origin_actual_departure_time']}. "
+            f"Overall arrival at Media delayed to {commute['actual_arrival_time']} (+{commute['total_delay_minutes']} min).",
             "default",
             ["yellow_circle"],
         )
 
     return (
-        "Commute looks good",
-        f"Train {commute['origin_train']} departs {commute['origin_actual_departure_time']}, "
-        f"on time, arriving {commute['actual_arrival_time']}.",
+        "🟢 Commute Looks Great",
+        f"Train {commute['origin_train']} departs East Falls at {commute['origin_actual_departure_time']}. "
+        f"Clean ~{commute['transfer_buffer_minutes']} min connection at Jefferson. Home by {commute['actual_arrival_time']}.",
         "default",
         ["white_check_mark"],
     )
 
 
 def run_afternoon_check():
-    """Entry point called by the scheduler. Checks conditions and sends
-    exactly one notification for the afternoon commute."""
-    commute = get_commute_leg(WORK_STATION, HOME_STATION)
+    commute = get_afternoon_commute(
+        WORK_STATION, PREFERRED_TRANSFER_STATION, HOME_STATION, AFTERNOON_TARGET_DEPARTURE_TIME
+    )
     alerts = get_alerts()
 
     title, message, priority, tags = build_afternoon_message(commute, alerts)

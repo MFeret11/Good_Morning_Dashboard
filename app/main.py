@@ -1,11 +1,10 @@
 from datetime import datetime
-
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from app.config import (
-    HOME_STATION, WORK_STATION,
+    HOME_STATION, WORK_STATION, PREFERRED_TRANSFER_STATION,
     MORNING_START, MORNING_END, AFTERNOON_START, AFTERNOON_END,
     ACTIVE_POLL_INTERVAL_MS, IDLE_POLL_INTERVAL_MS,
     AFTERNOON_TARGET_DEPARTURE_TIME,
@@ -15,7 +14,6 @@ from app.alerts import get_alerts
 from app.weather import get_weather
 from app.scheduler import start_scheduler
 from app.afternoon_check import run_afternoon_check
-from app.config import PREFERRED_TRANSFER_STATION
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -36,18 +34,16 @@ def read_root():
     return {"status": "ok", "message": "SEPTA dashboard backend running"}
 
 
-# --- Core endpoints ---
-
 @app.get("/api/commute_morning")
 def get_commute_morning():
-    """Morning commute: home -> work"""
     return get_commute_leg(HOME_STATION, WORK_STATION)
 
 
 @app.get("/api/commute_return")
 def get_commute_return():
-    """Afternoon return: work -> home"""
-    return get_commute_leg(WORK_STATION, HOME_STATION)
+    return get_afternoon_commute(
+        WORK_STATION, PREFERRED_TRANSFER_STATION, HOME_STATION, AFTERNOON_TARGET_DEPARTURE_TIME
+    )
 
 
 @app.get("/api/alerts")
@@ -62,16 +58,15 @@ def api_get_weather():
 
 @app.post("/api/test_notification")
 def test_notification():
-    """Manually trigger the afternoon check/notification, for testing without
-    waiting for the scheduled time."""
     run_afternoon_check()
     return {"status": "triggered"}
 
 
 def get_active_window() -> str | None:
-    hour = datetime.now().hour
-    if datetime.now().weekday() >= 5:  # Saturday=5, Sunday=6
+    now = datetime.now()
+    if now.weekday() >= 5:  # Saturday=5, Sunday=6
         return None
+    hour = now.hour
     if MORNING_START <= hour < MORNING_END:
         return "morning"
     elif AFTERNOON_START <= hour < AFTERNOON_END:
@@ -86,15 +81,22 @@ def get_dashboard():
     if window == "morning":
         commute = get_commute_leg(HOME_STATION, WORK_STATION)
     elif window == "afternoon":
-        commute = get_afternoon_commute(WORK_STATION, PREFERRED_TRANSFER_STATION, HOME_STATION, AFTERNOON_TARGET_DEPARTURE_TIME)
+        commute = get_afternoon_commute(
+            WORK_STATION, PREFERRED_TRANSFER_STATION, HOME_STATION, AFTERNOON_TARGET_DEPARTURE_TIME
+        )
     else:
         commute = {"error": "Outside active commute windows"}
 
     alerts = get_alerts()
     weather = get_weather()
 
-    if alerts.get("has_critical_alerts"):
+    # Status Resolver
+    if "error" in commute:
+        overall_status = "error" if window else "idle"
+    elif alerts.get("has_critical_alerts"):
         overall_status = "alert"
+    elif commute.get("missed_connection"):
+        overall_status = "missed_connection"
     elif commute.get("at_risk"):
         overall_status = "at_risk"
     elif commute.get("delayed"):
