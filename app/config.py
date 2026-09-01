@@ -22,11 +22,11 @@ WALK_TIMES = {
 DEFAULT_WALK_TIME_MINUTES = 5
 
 # --- Timing & Thresholds ---
-RISK_BUFFER_MINUTES = 3           # Transfers with < 3 min buffer are "at_risk"
-SIGNIFICANT_DELAY_MINUTES = 10    # Trips with >= 10 min total delay are "delayed"
-LEAVE_NOW_THRESHOLD_MINUTES = 3   # <= 3 min to leave = urgent "LEAVE NOW"
+RISK_BUFFER_MINUTES = 0               # Transfer buffer below 0 is "at_risk" (Jefferson shared platform)
+SIGNIFICANT_DELAY_MINUTES = 10        # Trips with >= 10 min total delay are "delayed"
+LEAVE_NOW_THRESHOLD_MINUTES = 3       # <= 3 min to leave = urgent "LEAVE NOW"
 AFTERNOON_TARGET_DEPARTURE_TIME = "4:50PM"
-MISSED_CONNECTION_BUFFER_MINUTES = 2 # Minimum 2 min needed to physically switch platforms
+MISSED_CONNECTION_BUFFER_MINUTES = -5 # Floor below which connection is uncatchable
 
 # --- Active Commute Windows (24hr clock) ---
 MORNING_START, MORNING_END = 5, 9

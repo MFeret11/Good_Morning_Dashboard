@@ -1,5 +1,5 @@
-"""Commute-window-aware weather: high/low, dominant condition, severe
-weather flags scoped to actual commute hours, and dual-window attire suggestion."""
+"""Commute-window-aware weather with in-memory resilient fallback cache."""
+import time
 from collections import Counter
 import requests
 
@@ -8,6 +8,9 @@ from app.config import (
     WMO_CODES, SEVERE_CODES, MORNING_START, MORNING_END, AFTERNOON_START, AFTERNOON_END,
 )
 
+_WEATHER_CACHE = {}
+WEATHER_CACHE_TTL_SECONDS = 900  # 15-minute weather cache fallback
+
 
 def _find_severe(hours):
     hits = [h for h in hours if h["code"] in SEVERE_CODES]
@@ -15,6 +18,7 @@ def _find_severe(hours):
 
 
 def get_weather() -> dict:
+    now = time.time()
     params = {
         "latitude": WEATHER_LAT,
         "longitude": WEATHER_LON,
@@ -24,10 +28,22 @@ def get_weather() -> dict:
         "timezone": "America/New_York",
         "current_weather": "true",
     }
+    
+    data = None
     try:
-        response = requests.get("https://api.open-meteo.com/v1/forecast", params=params, timeout=10)
+        response = requests.get("https://api.open-meteo.com/v1/forecast", params=params, timeout=8)
         data = response.json()
+        if "hourly" in data:
+            _WEATHER_CACHE["latest"] = (data, now)
     except (requests.RequestException, ValueError):
+        pass
+
+    if not data and "latest" in _WEATHER_CACHE:
+        cached_data, cached_at = _WEATHER_CACHE["latest"]
+        if (now - cached_at) <= WEATHER_CACHE_TTL_SECONDS:
+            data = cached_data
+
+    if not data:
         return {"error": "Weather service unavailable"}
 
     hourly = data.get("hourly", {})
@@ -65,7 +81,6 @@ def get_weather() -> dict:
     most_common_code = code_counts.most_common(1)[0][0]
     condition = WMO_CODES.get(most_common_code, "Unknown")
 
-    # Scoped Commute Windows
     morning_window = [h for h in day_window if MORNING_START <= h["hour"] <= MORNING_END]
     evening_window = [h for h in day_window if AFTERNOON_START <= h["hour"] <= AFTERNOON_END]
 
@@ -90,7 +105,6 @@ def get_weather() -> dict:
     commute_rain = any(h["precip"] > 0 or h["precip_chance"] >= 40 for h in morning_window + evening_window)
     needs_umbrella = bool(morning_severe or evening_severe) or commute_rain or (total_precip > 0.05)
 
-    # DUAL-WINDOW COMMUTE WARDROBE LOGIC
     temp_spread = evening_temp - morning_temp
 
     if needs_umbrella:

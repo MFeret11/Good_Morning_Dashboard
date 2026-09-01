@@ -1,5 +1,5 @@
 """Builds and sends the daily afternoon commute notification with
-live platform track assignments, delay warnings, and cancellation alerts."""
+live platform track assignments, delay warnings, and stall alerts."""
 from app.commute import get_commute
 from app.alerts import get_alerts
 from app.config import (
@@ -12,8 +12,8 @@ from app.notifications import send_notification
 def build_afternoon_message(commute: dict, alerts: dict) -> tuple[str, str, str, list[str]]:
     if "error" in commute:
         return (
-            "Commute Check Failed",
-            f"Could not retrieve train data: {commute['error']}. Check SEPTA manually.",
+            "Commute check failed",
+            f"Could not retrieve train data: {commute.get('error', 'Unknown error')}. Check SEPTA manually.",
             "high",
             ["warning"],
         )
@@ -21,7 +21,7 @@ def build_afternoon_message(commute: dict, alerts: dict) -> tuple[str, str, str,
     if alerts.get("has_critical_alerts"):
         lines = ", ".join(a["line"] for a in alerts["critical_alerts"])
         return (
-            "🚨 SEPTA Service Alert",
+            "SEPTA service alert",
             f"Active alerts on {lines}. Check dashboard before leaving.",
             "urgent",
             ["rotating_light"],
@@ -29,56 +29,75 @@ def build_afternoon_message(commute: dict, alerts: dict) -> tuple[str, str, str,
 
     if commute.get("is_cancelled") or commute.get("connection_cancelled"):
         return (
-            "❌ TRAIN CANCELLED",
-            f"Train {commute['origin_train']} (or connection) is CANCELLED today. "
+            "TRAIN CANCELLED",
+            f"Train {commute.get('origin_train')} (or connection) is CANCELLED today. "
             f"Next backup option departs at {commute.get('backup_train_departure', 'check SEPTA')}.",
             "urgent",
             ["x"],
         )
 
+    # STALL DETECTOR ALERT
+    if commute.get("is_stalled") or commute.get("connection_is_stalled"):
+        stalled_train = commute.get('origin_train') if commute.get("is_stalled") else commute.get('connection_train')
+        stalled_stop = commute.get('origin_current_stop') if commute.get("is_stalled") else commute.get('connection_current_stop')
+        stalled_min = commute.get('stall_minutes') if commute.get("is_stalled") else commute.get('connection_stall_minutes')
+        return (
+            "Train Stalled on Track",
+            f"Train {stalled_train} has been stopped at {stalled_stop} for ~{stalled_min} min. "
+            f"Expect heavier delays than reported by SEPTA.",
+            "high",
+            ["warning"],
+        )
+
     if commute.get("missed_connection"):
         return (
-            "🚨 Missed Connection Alert",
-            f"Train {commute['origin_train']} reaches {commute.get('connection_station')} too late for the regular Media train. "
-            f"Re-planned arrival at Media: {commute['actual_arrival_time']}.",
+            "Missed Connection Alert",
+            f"Train {commute.get('origin_train')} reaches {commute.get('connection_station')} too late for the regular Media train. "
+            f"Re-planned arrival at Media: {commute.get('actual_arrival_time')}.",
             "urgent",
             ["warning"],
         )
 
+    conn_track = commute.get('connection_track')
+    track_info = f" (Track {conn_track})" if conn_track and conn_track != "TBD" else ""
+
     if commute.get("at_risk"):
-        track_info = f" (Track {commute['connection_track']})" if commute.get("connection_track") != "TBD" else ""
         return (
-            "⚠️ Tight Connection",
-            f"Train {commute['origin_train']} departs East Falls at {commute['origin_actual_departure_time']} "
-            f"(+{commute['origin_delay_minutes']}m). Only ~{commute['transfer_buffer_minutes']} min to make connection at {commute.get('connection_station')}{track_info}!",
+            "Tight connection today",
+            f"Train {commute.get('origin_train')} departs {commute.get('origin_actual_departure_time')}, "
+            f"running {commute.get('origin_delay_minutes', 0)} min late - only ~"
+            f"{round(commute.get('transfer_buffer_minutes', 0))} min to make your connection at "
+            f"{commute.get('connection_station', 'the transfer point')}{track_info}.",
             "high",
             ["warning"],
         )
 
     if commute.get("connection_delay_minutes", 0) >= 10:
-        track_info = f" on Track {commute['connection_track']}" if commute.get("connection_track") != "TBD" else ""
         return (
-            "🟡 Connecting Media Train Delayed",
+            "Connecting Media Train Delayed",
             f"Train {commute.get('connection_train')}{track_info} at Jefferson is running "
-            f"{commute['connection_delay_minutes']} min late. Expected arrival: {commute['actual_arrival_time']}. Wait in office if preferred.",
+            f"{commute.get('connection_delay_minutes')} min late. Expected arrival: {commute.get('actual_arrival_time')}. Wait in office if preferred.",
             "default",
             ["hourglass"],
         )
 
     if commute.get("delayed"):
         return (
-            "🟡 Commute Delayed",
-            f"Departing East Falls at {commute['origin_actual_departure_time']}. "
-            f"Expected home at {commute['actual_arrival_time']} (+{commute['total_delay_minutes']} min).",
+            "Running behind today",
+            f"Train {commute.get('origin_train')} departed {commute.get('origin_actual_departure_time')}, "
+            f"running {commute.get('total_delay_minutes', 0)} min behind overall. "
+            f"Expected arrival: {commute.get('actual_arrival_time')} (scheduled {commute.get('arrival_time')}). "
+            f"Might be worth waiting it out if you're comfortable where you are.",
             "default",
             ["yellow_circle"],
         )
 
-    track_str = f" · Track {commute['origin_track']}" if commute.get("origin_track") != "TBD" else ""
+    orig_track = commute.get('origin_track')
+    track_str = f" · Track {orig_track}" if orig_track and orig_track != "TBD" else ""
     return (
-        "🟢 Commute Looks Great",
-        f"Train {commute['origin_train']}{track_str} departs East Falls at {commute['origin_actual_departure_time']}. "
-        f"Clean ~{commute['transfer_buffer_minutes']} min transfer at Jefferson. Home by {commute['actual_arrival_time']}.",
+        "Commute looks good",
+        f"Train {commute.get('origin_train')}{track_str} departs {commute.get('origin_actual_departure_time')}, "
+        f"on time, arriving {commute.get('actual_arrival_time')}.",
         "default",
         ["white_check_mark"],
     )
