@@ -202,25 +202,32 @@ def _build_transfer_trip(chosen: dict, walk_time: int, alternatives: list) -> di
 
 
 def _build_itinerary_matrix(origin: str, destination: str, transfer_station: str, raw_results: list) -> list:
-    """Constructs the Next-3 Feasible Commute Itineraries (pairing origin and connecting legs)."""
+    """Constructs the Next-3 Feasible Commute Itineraries (pairing origin and connecting legs to final destination)."""
     itineraries = []
+    
+    # Direct trains from ORIGIN to FINAL DESTINATION
     direct_trips = [r for r in raw_results if r.get("isdirect") == "true"]
+    direct_train_numbers = {r.get("orig_train") for r in direct_trips}
+
     leg1_results = _fetch_trips(origin, transfer_station)
     leg2_results = _fetch_trips(transfer_station, destination)
 
     candidates = leg1_results if leg1_results else raw_results
 
     for idx, leg1 in enumerate(candidates[:3]):
-        # Direct Trip Option
-        if leg1.get("isdirect") == "true" or (direct_trips and leg1 in direct_trips):
-            delay = parse_delay_minutes(leg1.get("orig_delay", "On time"))
-            act_dep = parse_time(leg1["orig_departure_time"]) + timedelta(minutes=delay)
-            act_arr = parse_time(leg1["orig_arrival_time"]) + timedelta(minutes=delay)
+        train_no = leg1.get("orig_train")
+
+        # Case 1: True Direct Train all the way from origin to final destination
+        if train_no in direct_train_numbers:
+            matching_direct = next((r for r in direct_trips if r.get("orig_train") == train_no), leg1)
+            delay = parse_delay_minutes(matching_direct.get("orig_delay", "On time"))
+            act_dep = parse_time(matching_direct["orig_departure_time"]) + timedelta(minutes=delay)
+            act_arr = parse_time(matching_direct["orig_arrival_time"]) + timedelta(minutes=delay)
             itineraries.append({
                 "option": idx + 1,
                 "trip_type": "direct",
-                "origin_train": leg1.get("orig_train"),
-                "origin_line": leg1.get("orig_line"),
+                "origin_train": matching_direct.get("orig_train"),
+                "origin_line": matching_direct.get("orig_line"),
                 "origin_actual_departure": format_time_no_leading_zero(act_dep),
                 "origin_delay_minutes": delay,
                 "connection_train": None,
@@ -230,12 +237,12 @@ def _build_itinerary_matrix(origin: str, destination: str, transfer_station: str
             })
             continue
 
-        # Transfer Trip Option
+        # Case 2: Transfer Required at Transfer Station
         leg1_delay = parse_delay_minutes(leg1.get("orig_delay", "On time"))
         leg1_act_dep = parse_time(leg1["orig_departure_time"]) + timedelta(minutes=leg1_delay)
         leg1_act_arr = parse_time(leg1["orig_arrival_time"]) + timedelta(minutes=leg1_delay)
 
-        # Pair with best catchable leg2
+        # Pair with earliest catchable leg 2 to final destination
         catchable_leg2 = None
         best_buffer = -999.0
 
@@ -292,7 +299,7 @@ def get_commute(
     raw_results = _fetch_trips(origin, destination)
     transfer_station = preferred_transfer or DEFAULT_TRANSFER_STATION
 
-    # 1. Evaluate Direct Trips
+    # 1. Direct Trips from origin to destination
     direct_trips = [r for r in raw_results if r.get("isdirect") == "true"]
     if direct_trips:
         chosen_direct = _pick_closest_to_target(direct_trips, target_time) if target_time else direct_trips[0]
@@ -300,7 +307,7 @@ def get_commute(
         trip["itineraries"] = _build_itinerary_matrix(origin, destination, transfer_station, raw_results)
         return trip
 
-    # 2. Evaluate Transfer Trips
+    # 2. Transfer Trips
     leg1_results = _fetch_trips(origin, transfer_station)
     if not leg1_results:
         if raw_results:
