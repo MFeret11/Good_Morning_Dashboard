@@ -1,5 +1,6 @@
 """Builds and sends the daily afternoon commute notification with
-live platform track assignments, delay warnings, and stall alerts."""
+live platform track assignments, detailed alert text, and stall alerts."""
+import re
 from app.commute import get_commute
 from app.alerts import get_alerts
 from app.config import (
@@ -7,6 +8,15 @@ from app.config import (
     AFTERNOON_TARGET_DEPARTURE_TIME,
 )
 from app.notifications import send_notification
+
+
+def _clean_alert_text(text: str) -> str:
+    """Strips HTML tags and normalizes whitespace for clean lock-screen push display."""
+    if not text:
+        return ""
+    clean = re.sub(r"<[^>]+>", " ", str(text))
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return clean
 
 
 def build_afternoon_message(commute: dict, alerts: dict) -> tuple[str, str, str, list[str]]:
@@ -18,11 +28,24 @@ def build_afternoon_message(commute: dict, alerts: dict) -> tuple[str, str, str,
             ["warning"],
         )
 
+    # CRITICAL SERVICE ALERTS (WITH DETAILED LIVE REASON)
     if alerts.get("has_critical_alerts"):
-        lines = ", ".join(a["line"] for a in alerts["critical_alerts"])
+        alert_lines = []
+        for a in alerts["critical_alerts"]:
+            line = a.get("line", "Regional Rail")
+            clean_text = _clean_alert_text(a.get("alert_text", ""))
+
+            if not clean_text:
+                active_flags = [k.replace("_", " ") for k, v in a.get("flags", {}).items() if v]
+                flag_summary = ", ".join(active_flags) if active_flags else "Service disruption"
+                clean_text = f"Reported {flag_summary}"
+
+            alert_lines.append(f"{line}: {clean_text}")
+
+        message_body = "\n\n".join(alert_lines)
         return (
             "SEPTA service alert",
-            f"Active alerts on {lines}. Check dashboard before leaving.",
+            message_body,
             "urgent",
             ["rotating_light"],
         )

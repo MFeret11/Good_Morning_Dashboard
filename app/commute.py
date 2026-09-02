@@ -1,5 +1,5 @@
-"""Universal Transit Resolver: Direct & Transfer routing, live platform tracking,
-in-memory circuit-breaker fallback cache, and GPS stall detection."""
+"""Universal Transit Resolver: Direct & Transfer routing, Next-3 Itinerary Matrix,
+live platform tracking via TrainView, circuit-breaker fallback cache, and GPS stall detection."""
 import time
 from datetime import datetime, timedelta
 import requests
@@ -7,7 +7,7 @@ import requests
 from app.config import (
     SEPTA_BASE, WALK_TIMES, DEFAULT_WALK_TIME_MINUTES, RISK_BUFFER_MINUTES,
     SIGNIFICANT_DELAY_MINUTES, LEAVE_NOW_THRESHOLD_MINUTES,
-    MISSED_CONNECTION_BUFFER_MINUTES,
+    MISSED_CONNECTION_BUFFER_MINUTES, DEFAULT_TRANSFER_STATION,
 )
 from app.time_utils import parse_time, parse_delay_minutes, format_time_no_leading_zero, anchor_to_today
 
@@ -201,6 +201,82 @@ def _build_transfer_trip(chosen: dict, walk_time: int, alternatives: list) -> di
     }
 
 
+def _build_itinerary_matrix(origin: str, destination: str, transfer_station: str, raw_results: list) -> list:
+    """Constructs the Next-3 Feasible Commute Itineraries (pairing origin and connecting legs)."""
+    itineraries = []
+    direct_trips = [r for r in raw_results if r.get("isdirect") == "true"]
+    leg1_results = _fetch_trips(origin, transfer_station)
+    leg2_results = _fetch_trips(transfer_station, destination)
+
+    candidates = leg1_results if leg1_results else raw_results
+
+    for idx, leg1 in enumerate(candidates[:3]):
+        # Direct Trip Option
+        if leg1.get("isdirect") == "true" or (direct_trips and leg1 in direct_trips):
+            delay = parse_delay_minutes(leg1.get("orig_delay", "On time"))
+            act_dep = parse_time(leg1["orig_departure_time"]) + timedelta(minutes=delay)
+            act_arr = parse_time(leg1["orig_arrival_time"]) + timedelta(minutes=delay)
+            itineraries.append({
+                "option": idx + 1,
+                "trip_type": "direct",
+                "origin_train": leg1.get("orig_train"),
+                "origin_line": leg1.get("orig_line"),
+                "origin_actual_departure": format_time_no_leading_zero(act_dep),
+                "origin_delay_minutes": delay,
+                "connection_train": None,
+                "transfer_buffer_minutes": 0,
+                "actual_arrival_time": format_time_no_leading_zero(act_arr),
+                "status": "delayed" if delay >= SIGNIFICANT_DELAY_MINUTES else "ok",
+            })
+            continue
+
+        # Transfer Trip Option
+        leg1_delay = parse_delay_minutes(leg1.get("orig_delay", "On time"))
+        leg1_act_dep = parse_time(leg1["orig_departure_time"]) + timedelta(minutes=leg1_delay)
+        leg1_act_arr = parse_time(leg1["orig_arrival_time"]) + timedelta(minutes=leg1_delay)
+
+        # Pair with best catchable leg2
+        catchable_leg2 = None
+        best_buffer = -999.0
+
+        for leg2 in leg2_results:
+            leg2_delay = parse_delay_minutes(leg2.get("orig_delay", "On time"))
+            leg2_act_dep = parse_time(leg2["orig_departure_time"]) + timedelta(minutes=leg2_delay)
+            buf = (leg2_act_dep - leg1_act_arr).total_seconds() / 60
+            if buf >= MISSED_CONNECTION_BUFFER_MINUTES:
+                catchable_leg2 = leg2
+                best_buffer = buf
+                break
+
+        if catchable_leg2:
+            conn_delay = parse_delay_minutes(catchable_leg2.get("orig_delay", "On time"))
+            final_arr = parse_time(catchable_leg2["orig_arrival_time"]) + timedelta(minutes=conn_delay)
+            tot_delay = max(leg1_delay, conn_delay)
+
+            status = "ok"
+            if best_buffer < RISK_BUFFER_MINUTES:
+                status = "at_risk"
+            elif tot_delay >= SIGNIFICANT_DELAY_MINUTES:
+                status = "delayed"
+
+            itineraries.append({
+                "option": idx + 1,
+                "trip_type": "transfer",
+                "origin_train": leg1.get("orig_train"),
+                "origin_line": leg1.get("orig_line"),
+                "origin_actual_departure": format_time_no_leading_zero(leg1_act_dep),
+                "origin_delay_minutes": leg1_delay,
+                "connection_train": catchable_leg2.get("orig_train"),
+                "connection_line": catchable_leg2.get("orig_line"),
+                "connection_actual_departure": format_time_no_leading_zero(parse_time(catchable_leg2["orig_departure_time"]) + timedelta(minutes=conn_delay)),
+                "transfer_buffer_minutes": round(best_buffer, 1),
+                "actual_arrival_time": format_time_no_leading_zero(final_arr),
+                "status": status,
+            })
+
+    return itineraries
+
+
 def _pick_closest_to_target(results: list, target_time_str: str) -> dict:
     target = parse_time(target_time_str)
     return min(results, key=lambda r: abs((parse_time(r["orig_departure_time"]) - target).total_seconds()))
@@ -214,32 +290,37 @@ def get_commute(
 ) -> dict:
     walk_time = WALK_TIMES.get(origin, DEFAULT_WALK_TIME_MINUTES)
     raw_results = _fetch_trips(origin, destination)
+    transfer_station = preferred_transfer or DEFAULT_TRANSFER_STATION
 
-    # 1. Direct Trips
+    # 1. Evaluate Direct Trips
     direct_trips = [r for r in raw_results if r.get("isdirect") == "true"]
     if direct_trips:
         chosen_direct = _pick_closest_to_target(direct_trips, target_time) if target_time else direct_trips[0]
-        return _build_direct_trip(chosen_direct, walk_time, alternatives=raw_results)
+        trip = _build_direct_trip(chosen_direct, walk_time, alternatives=raw_results)
+        trip["itineraries"] = _build_itinerary_matrix(origin, destination, transfer_station, raw_results)
+        return trip
 
-    # 2. Transfer Trips
-    transfer_station = preferred_transfer or "Jefferson Station"
+    # 2. Evaluate Transfer Trips
     leg1_results = _fetch_trips(origin, transfer_station)
     if not leg1_results:
         if raw_results:
-            return _build_transfer_trip(raw_results[0], walk_time, alternatives=raw_results)
+            trip = _build_transfer_trip(raw_results[0], walk_time, alternatives=raw_results)
+            trip["itineraries"] = []
+            return trip
         return {"error": f"No trips found"}
 
     leg2_results = _fetch_trips(transfer_station, destination)
     if not leg2_results:
         if raw_results:
-            return _build_transfer_trip(raw_results[0], walk_time, alternatives=raw_results)
+            trip = _build_transfer_trip(raw_results[0], walk_time, alternatives=raw_results)
+            trip["itineraries"] = []
+            return trip
         return {"error": f"No connecting trains found at {transfer_station}"}
 
     leg1 = _pick_closest_to_target(leg1_results, target_time) if target_time else leg1_results[0]
     leg1_delay = parse_delay_minutes(leg1.get("orig_delay", "On time"))
     leg1_actual_arrival = parse_time(leg1["orig_arrival_time"]) + timedelta(minutes=leg1_delay)
 
-    # Filter catchable leg2 options
     catchable = []
     for leg2 in leg2_results:
         leg2_delay = parse_delay_minutes(leg2.get("orig_delay", "On time"))
@@ -248,13 +329,14 @@ def get_commute(
         if buffer_min >= MISSED_CONNECTION_BUFFER_MINUTES:
             catchable.append((leg2, buffer_min))
 
-    # Connection uncatchable: Fall back to SEPTA single-call if not anchored to target_time
     if not catchable:
         if target_time:
             missed_connection = True
             leg2_chosen = leg2_results[0]
         elif raw_results:
-            return _build_transfer_trip(raw_results[0], walk_time, alternatives=raw_results)
+            trip = _build_transfer_trip(raw_results[0], walk_time, alternatives=raw_results)
+            trip["itineraries"] = []
+            return trip
         else:
             return {"error": "No viable connections found"}
     else:
@@ -278,6 +360,7 @@ def get_commute(
 
     trip = _build_transfer_trip(chosen, walk_time, alternatives=leg2_results)
     trip["missed_connection"] = missed_connection
+    trip["itineraries"] = _build_itinerary_matrix(origin, destination, transfer_station, raw_results)
     return trip
 
 
