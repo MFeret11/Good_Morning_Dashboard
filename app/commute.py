@@ -11,11 +11,14 @@ from app.config import (
 )
 from app.time_utils import parse_time, parse_delay_minutes, format_time_no_leading_zero, anchor_to_today
 
-# In-Memory Cache Structures
+# In-Memory Caches
 _TRIP_CACHE = {}          # (origin, destination) -> (data, timestamp)
 _TRAIN_POSITIONS = {}     # train_no -> {"stop": str, "lat": float, "lon": float, "first_seen_at": float}
-CACHE_TTL_SECONDS = 300   # 5-minute fallback cache window
-STALL_THRESHOLD_SECONDS = 600  # 10 minutes at the same stop = stalled
+_TRAINVIEW_CACHE = ([], 0.0) # (trains_list, timestamp)
+
+CACHE_TTL_SECONDS = 300
+TRAINVIEW_TTL_SECONDS = 15
+STALL_THRESHOLD_SECONDS = 600
 
 
 def _fetch_trips(origin: str, destination: str) -> list:
@@ -39,61 +42,81 @@ def _fetch_trips(origin: str, destination: str) -> list:
     return []
 
 
-def _fetch_live_train_metadata(train_number: str) -> dict:
-    """Fetches TrainView telemetry and runs GPS stall analysis."""
-    if not train_number or not str(train_number).isdigit():
-        return {}
-    
+def _get_trainview_feed() -> list:
+    """Fetches TrainView with a 15-second cache to prevent multi-download storms."""
+    global _TRAINVIEW_CACHE
     now = time.time()
+    cached_data, cached_at = _TRAINVIEW_CACHE
+
+    if cached_data and (now - cached_at) <= TRAINVIEW_TTL_SECONDS:
+        return cached_data
+
     try:
         response = requests.get(
             f"{SEPTA_BASE}/TrainView/index.php",
             params={"req1": "TrainView", "req2": "TrainView"},
             timeout=5,
         )
-        trains = response.json()
-        if not isinstance(trains, list):
-            return {}
-
-        match = next((t for t in trains if str(t.get("trainno")) == str(train_number)), None)
-        if match:
-            current_stop = match.get("currentstop", "Unknown")
-            lat = match.get("lat")
-            lon = match.get("lon")
-            track = match.get("track", "TBD")
-
-            is_stalled = False
-            stall_minutes = 0
-
-            if train_number in _TRAIN_POSITIONS:
-                prev = _TRAIN_POSITIONS[train_number]
-                if prev["stop"] == current_stop and current_stop != "Unknown":
-                    duration = now - prev["first_seen_at"]
-                    if duration >= STALL_THRESHOLD_SECONDS:
-                        is_stalled = True
-                        stall_minutes = round(duration / 60)
-                else:
-                    _TRAIN_POSITIONS[train_number] = {"stop": current_stop, "lat": lat, "lon": lon, "first_seen_at": now}
-            else:
-                _TRAIN_POSITIONS[train_number] = {"stop": current_stop, "lat": lat, "lon": lon, "first_seen_at": now}
-
-            return {
-                "track": track,
-                "current_stop": current_stop,
-                "is_stalled": is_stalled,
-                "stall_minutes": stall_minutes,
-                "consist": match.get("consist"),
-            }
+        data = response.json()
+        if isinstance(data, list):
+            _TRAINVIEW_CACHE = (data, now)
+            return data
     except Exception:
         pass
-    return {}
+
+    return cached_data
+
+
+def _fetch_live_train_metadata(train_number: str) -> dict:
+    """Extracts telemetry from TrainView and evaluates GPS stall without 24-hr leakage."""
+    if not train_number or not str(train_number).isdigit():
+        return {}
+
+    now = time.time()
+    trains = _get_trainview_feed()
+    match = next((t for t in trains if str(t.get("trainno")) == str(train_number)), None)
+
+    if not match:
+        return {}
+
+    current_stop = match.get("currentstop", "Unknown")
+    lat = match.get("lat")
+    lon = match.get("lon")
+    track = match.get("track", "TBD")
+
+    is_stalled = False
+    stall_minutes = 0
+
+    if train_number in _TRAIN_POSITIONS:
+        prev = _TRAIN_POSITIONS[train_number]
+        time_since_first_seen = now - prev["first_seen_at"]
+
+        # Reset if stale (e.g. from yesterday or > 1 hour ago)
+        if time_since_first_seen > 3600:
+            _TRAIN_POSITIONS[train_number] = {"stop": current_stop, "lat": lat, "lon": lon, "first_seen_at": now}
+        elif prev["stop"] == current_stop and current_stop != "Unknown":
+            if time_since_first_seen >= STALL_THRESHOLD_SECONDS:
+                is_stalled = True
+                stall_minutes = round(time_since_first_seen / 60)
+        else:
+            _TRAIN_POSITIONS[train_number] = {"stop": current_stop, "lat": lat, "lon": lon, "first_seen_at": now}
+    else:
+        _TRAIN_POSITIONS[train_number] = {"stop": current_stop, "lat": lat, "lon": lon, "first_seen_at": now}
+
+    return {
+        "track": track,
+        "current_stop": current_stop,
+        "is_stalled": is_stalled,
+        "stall_minutes": stall_minutes,
+        "consist": match.get("consist"),
+    }
 
 
 def _build_walk_and_leave_by(chosen: dict, walk_time: int) -> dict:
     delay_str = chosen.get("orig_delay", "On time")
     is_cancelled = "cancel" in str(delay_str).lower()
     origin_delay = parse_delay_minutes(delay_str)
-    
+
     origin_actual_departure = parse_time(chosen["orig_departure_time"]) + timedelta(minutes=origin_delay)
     leave_by = origin_actual_departure - timedelta(minutes=walk_time)
 
@@ -159,7 +182,7 @@ def _build_transfer_trip(chosen: dict, walk_time: int, alternatives: list) -> di
 
     scheduled_arrival = parse_time(chosen["orig_arrival_time"])
     actual_arrival = scheduled_arrival + timedelta(minutes=origin_delay)
-    
+
     scheduled_departure = parse_time(chosen["term_depart_time"])
     actual_departure = scheduled_departure + timedelta(minutes=connection_delay)
     transfer_buffer = (actual_departure - actual_arrival).total_seconds() / 60
@@ -175,7 +198,28 @@ def _build_transfer_trip(chosen: dict, walk_time: int, alternatives: list) -> di
     connection_stalled = conn_meta.get("is_stalled", False)
 
     at_risk = transfer_buffer < RISK_BUFFER_MINUTES or base["is_stalled"] or connection_stalled
-    delayed = total_delay_minutes >= SIGNIFICANT_DELAY_MINUTES or base["is_cancelled"] or connection_cancelled or at_risk
+    delayed = (
+        total_delay_minutes >= SIGNIFICANT_DELAY_MINUTES
+        or base["is_cancelled"]
+        or connection_cancelled
+        or at_risk
+    )
+
+    # Resolves the next available connecting train if primary is cancelled/missed
+    # Handles both SEPTA direct query keys (orig_*) and transfer query keys (term_*)
+    current_term_train = chosen.get("term_train")
+    next_alt = next(
+        (
+            alt for alt in alternatives
+            if (alt.get("term_train") or alt.get("orig_train")) != current_term_train
+        ),
+        None,
+    )
+    backup_departure = (
+        (next_alt.get("term_depart_time") or next_alt.get("orig_departure_time"))
+        if next_alt
+        else None
+    )
 
     return {
         "trip_type": "transfer",
@@ -197,27 +241,26 @@ def _build_transfer_trip(chosen: dict, walk_time: int, alternatives: list) -> di
         "total_delay_minutes": total_delay_minutes,
         "at_risk": at_risk,
         "delayed": delayed,
+        "backup_train_departure": backup_departure,
         "alternatives": alternatives,
     }
 
 
-def _build_itinerary_matrix(origin: str, destination: str, transfer_station: str, raw_results: list) -> list:
-    """Constructs the Next-3 Feasible Commute Itineraries (pairing origin and connecting legs to final destination)."""
+def _build_itinerary_matrix(
+    raw_results: list,
+    leg1_results: list,
+    leg2_results: list,
+) -> list:
+    """Constructs Next-3 Feasible Commute Itineraries using pre-fetched leg data."""
     itineraries = []
-    
-    # Direct trains from ORIGIN to FINAL DESTINATION
+
     direct_trips = [r for r in raw_results if r.get("isdirect") == "true"]
     direct_train_numbers = {r.get("orig_train") for r in direct_trips}
-
-    leg1_results = _fetch_trips(origin, transfer_station)
-    leg2_results = _fetch_trips(transfer_station, destination)
-
     candidates = leg1_results if leg1_results else raw_results
 
     for idx, leg1 in enumerate(candidates[:3]):
         train_no = leg1.get("orig_train")
 
-        # Case 1: True Direct Train all the way from origin to final destination
         if train_no in direct_train_numbers:
             matching_direct = next((r for r in direct_trips if r.get("orig_train") == train_no), leg1)
             delay = parse_delay_minutes(matching_direct.get("orig_delay", "On time"))
@@ -237,12 +280,10 @@ def _build_itinerary_matrix(origin: str, destination: str, transfer_station: str
             })
             continue
 
-        # Case 2: Transfer Required at Transfer Station
         leg1_delay = parse_delay_minutes(leg1.get("orig_delay", "On time"))
         leg1_act_dep = parse_time(leg1["orig_departure_time"]) + timedelta(minutes=leg1_delay)
         leg1_act_arr = parse_time(leg1["orig_arrival_time"]) + timedelta(minutes=leg1_delay)
 
-        # Pair with earliest catchable leg 2 to final destination
         catchable_leg2 = None
         best_buffer = -999.0
 
@@ -299,22 +340,22 @@ def get_commute(
     raw_results = _fetch_trips(origin, destination)
     transfer_station = preferred_transfer or DEFAULT_TRANSFER_STATION
 
-    # 1. Direct Trips from origin to destination
+    # 1. Direct Trips
     direct_trips = [r for r in raw_results if r.get("isdirect") == "true"]
     if direct_trips:
         chosen_direct = _pick_closest_to_target(direct_trips, target_time) if target_time else direct_trips[0]
         trip = _build_direct_trip(chosen_direct, walk_time, alternatives=raw_results)
-        trip["itineraries"] = _build_itinerary_matrix(origin, destination, transfer_station, raw_results)
+        trip["itineraries"] = _build_itinerary_matrix(raw_results, [], [])
         return trip
 
-    # 2. Transfer Trips
+    # 2. Transfer Trips (Pre-fetch once)
     leg1_results = _fetch_trips(origin, transfer_station)
     if not leg1_results:
         if raw_results:
             trip = _build_transfer_trip(raw_results[0], walk_time, alternatives=raw_results)
             trip["itineraries"] = []
             return trip
-        return {"error": f"No trips found"}
+        return {"error": "No trips found"}
 
     leg2_results = _fetch_trips(transfer_station, destination)
     if not leg2_results:
@@ -367,10 +408,10 @@ def get_commute(
 
     trip = _build_transfer_trip(chosen, walk_time, alternatives=leg2_results)
     trip["missed_connection"] = missed_connection
-    trip["itineraries"] = _build_itinerary_matrix(origin, destination, transfer_station, raw_results)
+    # Pass pre-fetched legs directly to avoid duplicate HTTP requests
+    trip["itineraries"] = _build_itinerary_matrix(raw_results, leg1_results, leg2_results)
     return trip
 
 
 def get_commute_leg(origin: str, destination: str) -> dict:
-    """Preserved for test suite backwards compatibility."""
     return get_commute(origin, destination)

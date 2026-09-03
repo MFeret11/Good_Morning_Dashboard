@@ -1,6 +1,7 @@
 """Builds and sends the daily afternoon commute notification with
 live platform track assignments, detailed alert text, and stall alerts."""
 import re
+import html
 from app.commute import get_commute
 from app.alerts import get_alerts
 from app.config import (
@@ -11,10 +12,10 @@ from app.notifications import send_notification
 
 
 def _clean_alert_text(text: str) -> str:
-    """Strips HTML tags and normalizes whitespace for clean lock-screen push display."""
     if not text:
         return ""
-    clean = re.sub(r"<[^>]+>", " ", str(text))
+    clean = html.unescape(str(text))
+    clean = re.sub(r"<[^>]+>", " ", clean)
     clean = re.sub(r"\s+", " ", clean).strip()
     return clean
 
