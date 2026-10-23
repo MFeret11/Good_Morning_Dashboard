@@ -6,3 +6,4 @@ __pycache__/
 # Local notes for AI coding agents; not for publishing
 CONTEXT.md
 app/CONTEXT.md
+CLAUDE.local.md
