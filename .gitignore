@@ -1,0 +1,8 @@
+venv/
+__pycache__/
+*.pyc
+.env
+.pytest_cache/
+# Local notes for AI coding agents; not for publishing
+CONTEXT.md
+app/CONTEXT.md
