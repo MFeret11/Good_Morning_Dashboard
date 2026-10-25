@@ -12,7 +12,8 @@ from app.config import (
 log = logging.getLogger(__name__)
 
 _WEATHER_CACHE = {}
-WEATHER_CACHE_TTL_SECONDS = 900  # 15-minute weather cache fallback
+WEATHER_FRESH_SECONDS = 600       # reuse a fetch this recent without calling Open-Meteo
+WEATHER_CACHE_TTL_SECONDS = 3600  # on failure, serve a fetch up to this old, marked stale
 
 
 def _find_severe(hours):
@@ -34,6 +35,13 @@ def get_weather() -> dict:
     
     data = None
     stale = False
+
+    # Home Assistant polls the dashboard every 30 s, and the day's forecast
+    # barely moves, so reuse a recent fetch instead of calling Open-Meteo.
+    cached = _WEATHER_CACHE.get("latest")
+    if cached and (now - cached[1]) < WEATHER_FRESH_SECONDS:
+        return _summarize(cached[0], stale=False)
+
     try:
         response = requests.get("https://api.open-meteo.com/v1/forecast", params=params, timeout=8)
         response.raise_for_status()
@@ -55,7 +63,10 @@ def get_weather() -> dict:
 
     if not data:
         return {"error": "Weather service unavailable"}
+    return _summarize(data, stale)
 
+
+def _summarize(data: dict, stale: bool) -> dict:
     hourly = data.get("hourly", {})
     current = data.get("current_weather", {})
     current_temp = current.get("temperature")

@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock, patch
 
+import app.weather
 from app.weather import get_weather
 
 
@@ -48,8 +49,18 @@ def test_freezing_drizzle_has_a_condition_name():
     assert w["condition"] == "Light freezing drizzle"
 
 
+def test_recent_forecast_is_reused_without_calling_open_meteo():
+    weather_for({}, temp=55)
+    with patch("app.weather.requests.get") as mock_get:
+        w = get_weather()
+    mock_get.assert_not_called()
+    assert w["weather_stale"] is False
+
+
 def test_error_payload_falls_back_to_last_forecast_marked_stale():
     weather_for({}, temp=55)
+    data, fetched_at = app.weather._WEATHER_CACHE["latest"]
+    app.weather._WEATHER_CACHE["latest"] = (data, fetched_at - app.weather.WEATHER_FRESH_SECONDS)
     error = MagicMock()
     error.json.return_value = {"error": True, "reason": "rate limited"}
     with patch("app.weather.requests.get", return_value=error):
