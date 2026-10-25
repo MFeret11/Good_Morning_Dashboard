@@ -1,4 +1,5 @@
 """Commute-window-aware weather with in-memory resilient fallback cache."""
+import logging
 import time
 from collections import Counter
 import requests
@@ -7,6 +8,8 @@ from app.config import (
     WEATHER_LAT, WEATHER_LON, WEATHER_WINDOW_START, WEATHER_WINDOW_END,
     WMO_CODES, SEVERE_CODES, FREEZING_CODES, SNOW_CODES, MORNING_START, MORNING_END, AFTERNOON_START, AFTERNOON_END,
 )
+
+log = logging.getLogger(__name__)
 
 _WEATHER_CACHE = {}
 WEATHER_CACHE_TTL_SECONDS = 900  # 15-minute weather cache fallback
@@ -30,18 +33,25 @@ def get_weather() -> dict:
     }
     
     data = None
+    stale = False
     try:
         response = requests.get("https://api.open-meteo.com/v1/forecast", params=params, timeout=8)
-        data = response.json()
-        if "hourly" in data:
-            _WEATHER_CACHE["latest"] = (data, now)
-    except (requests.RequestException, ValueError):
-        pass
+        response.raise_for_status()
+        payload = response.json()
+        # Open-Meteo errors come back as {"error": true, "reason": ...};
+        # treat anything without hourly data as a failure.
+        if not isinstance(payload, dict) or "hourly" not in payload:
+            raise ValueError(f"unexpected weather payload: {str(payload)[:200]}")
+        data = payload
+        _WEATHER_CACHE["latest"] = (data, now)
+    except (requests.RequestException, ValueError) as e:
+        log.warning("Open-Meteo failed: %s", e)
 
     if not data and "latest" in _WEATHER_CACHE:
         cached_data, cached_at = _WEATHER_CACHE["latest"]
         if (now - cached_at) <= WEATHER_CACHE_TTL_SECONDS:
             data = cached_data
+            stale = True
 
     if not data:
         return {"error": "Weather service unavailable"}
@@ -140,4 +150,5 @@ def get_weather() -> dict:
         "hourly_detail": day_window,
         "current_temp_f": round(current_temp) if current_temp is not None else None,
         "precip_chance": max_precip_chance,
+        "weather_stale": stale,
     }

@@ -27,6 +27,7 @@ FastAPI service polled by a Home Assistant REST sensor (`/api/dashboard`), plus 
 1. Query SEPTA NextToArrive origin→destination. If any result is direct, pick one and return.
 2. Otherwise query origin→transfer and transfer→destination separately, pick leg 1 (`_pick`: closest to `target_time` in the afternoon, else the first train whose leave-by is still within `LEAVE_BY_GRACE_MINUTES`), and pair it with leg 2 via `_plan_connection`.
 3. `_plan_connection` is the single source of truth for pairing: it compares the on-schedule connection with the delay-adjusted one, and sets `missed_connection` and `total_delay_minutes` relative to the planned arrival. `_transfer_itineraries` reuses it, so option 1 in `itineraries` always matches the main pick.
+   Cancelled connecting trains are skipped when pairing; if the on-schedule connection was cancelled, `planned_connection_cancelled` is set instead of `missed_connection`. `backup_train_departure` is the next non-cancelled train after the chosen one from the rider's own station.
 4. If no leg-2 train is catchable (SEPTA's list ends too early), fall back to SEPTA's own combined transfer pick (`septa_fallback`) rather than report a missed connection.
 
 TrainView positions add live delay and stall detection (`_fetch_live_train_metadata`, stall after `STALL_THRESHOLD_SECONDS` at the same stop).
@@ -36,9 +37,9 @@ TrainView positions add live delay and stall detection (`_fetch_live_train_metad
 - Error responses can be a dict instead of a list; `_fetch_trips` treats non-list payloads as failures.
 - Delay text is free-form: "On time", "5 min", "Cancelled", "Suspended", or something unparseable. Use `time_utils.is_cancelled_delay` / `is_delay_unknown`, and never treat unknown text as on time.
 
-**Failing soft.** Every upstream (trips, TrainView, alerts, weather) has a module-level in-memory cache with a TTL. On failure the last good value is served and flagged (`data_stale`, `alerts_stale`, `alerts_unavailable`). `afternoon_check._data_quality_notes` appends those caveats to the push, and `run_afternoon_check` sends `CHECK_FAILED_MESSAGE` on any crash, because a missing push reads as "all good".
+**Failing soft.** Every upstream (trips, TrainView, alerts, weather) has a module-level in-memory cache with a TTL. On failure the last good value is served and flagged (`data_stale`, `alerts_stale`, `alerts_unavailable`, `weather_stale`). `afternoon_check._data_quality_notes` appends those caveats to the push, and `run_afternoon_check` sends `CHECK_FAILED_MESSAGE` on any crash, because a missing push reads as "all good".
 
-**Push message priority (`afternoon_check._build_core_message`)**: critical alert > cancelled > stalled > unclear delay text > missed connection > tight connection > connecting train delayed > overall delay > minor delay / looks good. `main.get_dashboard` computes `overall_status` with a similar order for the dashboard.
+**Push message priority (`afternoon_check._build_core_message`)**: critical alert > cancelled > planned connection cancelled (rider rerouted onto a later one) > stalled > unclear delay text > missed connection > tight connection > connecting train delayed > overall delay > minor delay / looks good. `main.get_dashboard` computes `overall_status` with a similar order for the dashboard.
 
 ## Tests
 

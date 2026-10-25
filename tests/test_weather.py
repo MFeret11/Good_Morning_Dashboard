@@ -46,3 +46,17 @@ def test_rain_still_suggests_umbrella():
 def test_freezing_drizzle_has_a_condition_name():
     w = weather_for({h: 56 for h in range(5, 21)})
     assert w["condition"] == "Light freezing drizzle"
+
+
+def test_error_payload_falls_back_to_last_forecast_marked_stale():
+    weather_for({}, temp=55)
+    error = MagicMock()
+    error.json.return_value = {"error": True, "reason": "rate limited"}
+    with patch("app.weather.requests.get", return_value=error):
+        w = get_weather()
+    assert "error" not in w
+    assert w["weather_stale"] is True
+
+
+def test_fresh_forecast_is_not_marked_stale():
+    assert weather_for({}, temp=55)["weather_stale"] is False

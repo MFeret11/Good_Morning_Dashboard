@@ -271,3 +271,104 @@ def test_direct_itineraries_start_at_the_chosen_train(mock_get):
     commute = afternoon()
     assert commute["origin_train"] == "1005"
     assert [o["origin_train"] for o in commute["itineraries"]] == ["1005", "1009", "1013"]
+
+
+# --- Cancellations, backup trains and tight connections ---
+
+CANCELLED_LEG1 = [leg("9250", "4:45PM", "5:05PM"),
+                  leg("9254", "5:15PM", "5:35PM", "Cancelled"),
+                  leg("9258", "5:45PM", "6:05PM")]
+LEG2_EVENING = [leg("3556", "4:40PM", "5:15PM"),
+                leg("3560", "5:45PM", "6:20PM"),
+                leg("3564", "6:15PM", "6:50PM")]
+
+
+@patch("app.commute.requests.get")
+def test_cancelled_train_backup_is_the_next_train_from_the_riders_station(mock_get):
+    # The backup used to be the first connecting train in the list (4:40PM
+    # from the transfer station), earlier than the cancelled train itself.
+    mock_get.side_effect = septa({
+        ("Ambler", "Glenside"): SEPTA_PICK,
+        ("Ambler", "Jefferson Station"): CANCELLED_LEG1,
+        ("Jefferson Station", "Glenside"): LEG2_EVENING,
+    })
+    commute = afternoon()
+    assert commute["is_cancelled"] is True
+    assert commute["backup_train_departure"] == "5:45PM"
+    title, message, _, _ = build_afternoon_message(commute, NO_ALERTS)
+    assert title == "TRAIN CANCELLED"
+    assert "5:45PM" in message and "4:40PM" not in message
+    assert commute["itineraries"][0]["status"] == "cancelled"
+
+
+@patch("app.commute.requests.get")
+def test_backup_skips_cancelled_trains(mock_get):
+    mock_get.side_effect = septa({
+        ("Ambler", "Glenside"): SEPTA_PICK,
+        ("Ambler", "Jefferson Station"): [leg("9254", "5:15PM", "5:35PM", "Cancelled"),
+                                          leg("9258", "5:45PM", "6:05PM", "Cancelled"),
+                                          leg("9262", "6:15PM", "6:35PM")],
+        ("Jefferson Station", "Glenside"): LEG2_EVENING,
+    })
+    assert afternoon()["backup_train_departure"] == "6:15PM"
+
+
+@patch("app.commute.requests.get")
+def test_direct_trip_backup_is_never_an_earlier_train(mock_get):
+    direct = [dict(leg(n, d, a), isdirect="true")
+              for n, d, a in [("1001", "3:10PM", "3:40PM"),
+                              ("1005", "5:15PM", "5:45PM"),
+                              ("1009", "5:45PM", "6:15PM")]]
+    mock_get.side_effect = septa({("Ambler", "Glenside"): direct})
+    commute = afternoon()
+    assert commute["origin_train"] == "1005"
+    assert commute["backup_train_departure"] == "5:45PM"
+
+
+@patch("app.commute.requests.get")
+def test_cancelled_connection_is_skipped_and_reported(mock_get):
+    # The planned 5:45PM connection is cancelled. The rider should be routed
+    # onto the 6:15PM, and told why, not paired with a train that won't run.
+    mock_get.side_effect = septa({
+        ("Ambler", "Glenside"): SEPTA_PICK,
+        ("Ambler", "Jefferson Station"): [leg("9254", "5:15PM", "5:35PM")],
+        ("Jefferson Station", "Glenside"): [leg("3560", "5:45PM", "6:20PM", "Cancelled"),
+                                            leg("3564", "6:15PM", "6:50PM")],
+    })
+    commute = afternoon()
+    assert commute["connection_train"] == "3564"
+    assert commute["connection_cancelled"] is False
+    assert commute["planned_connection_cancelled"] is True
+    assert commute["missed_connection"] is False
+    assert commute["total_delay_minutes"] == 30
+    assert commute["delayed"] is True
+    title, message, priority, _ = build_afternoon_message(commute, NO_ALERTS)
+    assert title == "Connection cancelled"
+    assert "3560" in message and "3564" in message and "6:50PM" in message
+    assert priority == "urgent"
+
+
+@patch("app.commute.requests.get")
+def test_cancelled_option_is_not_labelled_ok(mock_get):
+    direct = [dict(leg("1005", "5:15PM", "5:45PM"), isdirect="true"),
+              dict(leg("1009", "5:45PM", "6:15PM", "Cancelled"), isdirect="true")]
+    mock_get.side_effect = septa({("Ambler", "Glenside"): direct})
+    statuses = [o["status"] for o in afternoon()["itineraries"]]
+    assert statuses == ["ok", "cancelled"]
+
+
+@patch("app.commute.requests.get")
+def test_tight_connection_push_never_shows_negative_minutes(mock_get):
+    # Arrives 5:48PM for a 5:45PM connection: -3 min, still catchable.
+    mock_get.side_effect = septa({
+        ("Ambler", "Glenside"): SEPTA_PICK,
+        ("Ambler", "Jefferson Station"): [leg("9254", "5:15PM", "5:48PM")],
+        ("Jefferson Station", "Glenside"): [leg("3560", "5:45PM", "6:20PM")],
+    })
+    commute = afternoon()
+    assert commute["at_risk"] is True
+    title, message, _, _ = build_afternoon_message(commute, NO_ALERTS)
+    assert title == "Tight connection today"
+    assert "-3" not in message
+    assert "about 3 min after" in message
+    assert "0 min late" not in message

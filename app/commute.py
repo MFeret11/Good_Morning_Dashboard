@@ -179,15 +179,28 @@ def _build_walk_and_leave_by(chosen: dict, walk_time: int) -> dict:
     }
 
 
-def _build_direct_trip(chosen: dict, walk_time: int, alternatives: list) -> dict:
+def _is_cancelled_trip(trip: dict) -> bool:
+    return is_cancelled_delay(trip.get("orig_delay")) or is_cancelled_delay(trip.get("term_delay"))
+
+
+def _next_backup_departure(results: list, chosen: dict) -> str | None:
+    """Scheduled departure of the next train after `chosen` from the same
+    station, skipping cancelled ones. `results` is the list `chosen` was
+    picked from, in SEPTA's (departure) order, so the backup is never an
+    earlier train or one from a different station."""
+    start = results.index(chosen) + 1
+    for trip in results[start:]:
+        if trip.get("orig_train") != chosen.get("orig_train") and not _is_cancelled_trip(trip):
+            return trip.get("orig_departure_time")
+    return None
+
+
+def _build_direct_trip(chosen: dict, walk_time: int, alternatives: list, backup_departure: str | None) -> dict:
     base = _build_walk_and_leave_by(chosen, walk_time)
     origin_delay = base["origin_delay_minutes"]
 
     scheduled_final_arrival = parse_time(chosen["orig_arrival_time"])
     actual_final_arrival = scheduled_final_arrival + timedelta(minutes=origin_delay)
-
-    next_alt = next((alt for alt in alternatives if alt.get("orig_train") != chosen.get("orig_train")), None)
-    backup_departure = next_alt.get("orig_departure_time") if next_alt else None
 
     delayed = (
         origin_delay >= SIGNIFICANT_DELAY_MINUTES
@@ -203,6 +216,7 @@ def _build_direct_trip(chosen: dict, walk_time: int, alternatives: list) -> dict
         "at_risk": base["is_stalled"],
         "delayed": delayed,
         "missed_connection": False,
+        "planned_connection_cancelled": False,
         "total_delay_minutes": origin_delay,
         "arrival_time": chosen.get("orig_arrival_time"),
         "actual_arrival_time": format_time_no_leading_zero(actual_final_arrival),
@@ -215,6 +229,7 @@ def _build_transfer_trip(
     chosen: dict,
     walk_time: int,
     alternatives: list,
+    backup_departure: str | None,
     planned_arrival: datetime | None = None,
 ) -> dict:
     """planned_arrival is when the trip would reach the destination if every
@@ -257,22 +272,6 @@ def _build_transfer_trip(
         or connection_delay_unknown
     )
 
-    # Resolves the next available connecting train if primary is cancelled/missed
-    # Handles both SEPTA direct query keys (orig_*) and transfer query keys (term_*)
-    current_term_train = chosen.get("term_train")
-    next_alt = next(
-        (
-            alt for alt in alternatives
-            if (alt.get("term_train") or alt.get("orig_train")) != current_term_train
-        ),
-        None,
-    )
-    backup_departure = (
-        (next_alt.get("term_depart_time") or next_alt.get("orig_departure_time"))
-        if next_alt
-        else None
-    )
-
     return {
         "trip_type": "transfer",
         **base,
@@ -297,6 +296,7 @@ def _build_transfer_trip(
         "at_risk": at_risk,
         "delayed": delayed,
         "missed_connection": False,
+        "planned_connection_cancelled": False,
         "backup_train_departure": backup_departure,
         "alternatives": alternatives,
     }
@@ -307,11 +307,15 @@ def _first_catchable_leg2(
 ) -> tuple[dict | None, float | None]:
     """Earliest connecting train whose departure is no more than
     MISSED_CONNECTION_BUFFER_MINUTES before `arrival`. With use_delays=False
-    it answers 'which train would we catch if everything ran on schedule?'.
+    it answers 'which train would we catch if everything ran on schedule?',
+    so cancelled trains still count there; with live data they are skipped,
+    because nobody can board them.
     Returns (train, buffer_minutes) or (None, None)."""
     for leg2 in leg2_results:
         departure = parse_time(leg2["orig_departure_time"])
         if use_delays:
+            if is_cancelled_delay(leg2.get("orig_delay")):
+                continue
             departure += timedelta(minutes=parse_delay_minutes(leg2.get("orig_delay", "On time")))
         buffer_min = (departure - arrival).total_seconds() / 60
         if buffer_min >= MISSED_CONNECTION_BUFFER_MINUTES:
@@ -339,6 +343,12 @@ def _plan_connection(leg1: dict, leg2_results: list) -> dict | None:
     planned_leg2, _ = _first_catchable_leg2(leg2_results, scheduled_arrival, use_delays=False)
     final_arrival = parse_time(leg2["orig_arrival_time"]) + timedelta(minutes=_delay_of(leg2))
     planned_arrival = parse_time((planned_leg2 or leg2)["orig_arrival_time"])
+    on_later_train = planned_leg2 is not None and (
+        parse_time(leg2["orig_departure_time"]) > parse_time(planned_leg2["orig_departure_time"])
+    )
+    # The on-schedule connection is cancelled, so the rider takes `leg2`
+    # instead. Reported as a cancellation, not a missed connection.
+    planned_cancelled = on_later_train and is_cancelled_delay(planned_leg2.get("orig_delay"))
 
     return {
         "leg1": leg1,
@@ -348,15 +358,24 @@ def _plan_connection(leg1: dict, leg2_results: list) -> dict | None:
         "actual_arrival": final_arrival,
         "total_delay_minutes": max(0, round((final_arrival - planned_arrival).total_seconds() / 60)),
         # Delays pushed the rider onto a later train than the on-schedule plan.
-        "missed_connection": planned_leg2 is not None and (
-            parse_time(leg2["orig_departure_time"]) > parse_time(planned_leg2["orig_departure_time"])
-        ),
+        "missed_connection": on_later_train and not planned_cancelled,
+        "planned_connection_cancelled": planned_cancelled,
+        "planned_connection_train": planned_leg2.get("orig_train") if planned_cancelled else None,
     }
 
 
-def _option_status(total_delay: int, buffer_min: float | None = None) -> str:
+def _option_status(
+    total_delay: int,
+    buffer_min: float | None = None,
+    cancelled: bool = False,
+    delay_unknown: bool = False,
+) -> str:
+    if cancelled:
+        return "cancelled"
     if buffer_min is not None and buffer_min < RISK_BUFFER_MINUTES:
         return "at_risk"
+    if delay_unknown:
+        return "unclear"
     return "delayed" if total_delay >= SIGNIFICANT_DELAY_MINUTES else "ok"
 
 
@@ -380,7 +399,11 @@ def _direct_itineraries(direct_trips: list, chosen: dict) -> list:
                 parse_time(trip["orig_arrival_time"]) + timedelta(minutes=delay)),
             "total_delay_minutes": delay,
             "missed_connection": False,
-            "status": _option_status(delay),
+            "status": _option_status(
+                delay,
+                cancelled=is_cancelled_delay(trip.get("orig_delay")),
+                delay_unknown=is_delay_unknown(trip.get("orig_delay")),
+            ),
         })
     return itineraries
 
@@ -412,7 +435,14 @@ def _transfer_itineraries(leg1_results: list, chosen_leg1: dict, leg2_results: l
             "actual_arrival_time": format_time_no_leading_zero(plan["actual_arrival"]),
             "total_delay_minutes": plan["total_delay_minutes"],
             "missed_connection": plan["missed_connection"],
-            "status": _option_status(plan["total_delay_minutes"], plan["buffer_minutes"]),
+            "planned_connection_cancelled": plan["planned_connection_cancelled"],
+            "status": _option_status(
+                plan["total_delay_minutes"],
+                plan["buffer_minutes"],
+                cancelled=is_cancelled_delay(leg1.get("orig_delay")),
+                delay_unknown=is_delay_unknown(leg1.get("orig_delay"))
+                or is_delay_unknown(leg2.get("orig_delay")),
+            ),
         })
     return itineraries
 
@@ -461,7 +491,10 @@ def get_commute(
     direct_trips = [r for r in raw_results if r.get("isdirect") == "true"]
     if direct_trips:
         chosen_direct = _pick(direct_trips, target_time, walk_time)
-        trip = _build_direct_trip(chosen_direct, walk_time, alternatives=raw_results)
+        trip = _build_direct_trip(
+            chosen_direct, walk_time, alternatives=raw_results,
+            backup_departure=_next_backup_departure(direct_trips, chosen_direct),
+        )
         trip["itineraries"] = _direct_itineraries(direct_trips, chosen_direct)
         trip["data_stale"] = raw_stale
         return trip
@@ -469,7 +502,11 @@ def get_commute(
     def septa_fallback(error: str, stale: bool) -> dict:
         if not raw_results:
             return {"error": error}
-        trip = _build_transfer_trip(_pick(raw_results, target_time, walk_time), walk_time, alternatives=raw_results)
+        pick = _pick(raw_results, target_time, walk_time)
+        trip = _build_transfer_trip(
+            pick, walk_time, alternatives=raw_results,
+            backup_departure=_next_backup_departure(raw_results, pick),
+        )
         trip["itineraries"] = []
         trip["data_stale"] = stale
         return trip
@@ -509,9 +546,15 @@ def get_commute(
     }
 
     trip = _build_transfer_trip(
-        chosen, walk_time, alternatives=leg2_results, planned_arrival=plan["planned_arrival"]
+        chosen, walk_time, alternatives=leg2_results,
+        backup_departure=_next_backup_departure(leg1_results, leg1),
+        planned_arrival=plan["planned_arrival"],
     )
     trip["missed_connection"] = plan["missed_connection"]
+    trip["planned_connection_cancelled"] = plan["planned_connection_cancelled"]
+    trip["planned_connection_train"] = plan["planned_connection_train"]
+    if plan["planned_connection_cancelled"]:
+        trip["delayed"] = True
     trip["data_stale"] = data_stale
     trip["itineraries"] = _transfer_itineraries(leg1_results, leg1, leg2_results)
     return trip

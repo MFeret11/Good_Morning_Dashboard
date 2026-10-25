@@ -15,6 +15,11 @@ def start_scheduler():
         trigger=CronTrigger(day_of_week="mon-fri", hour=NOTIFY_HOUR, minute=NOTIFY_MINUTE),
         id="afternoon_commute_check",
         replace_existing=True,
+        # APScheduler's default grace is 1 second: a run that starts any later
+        # (busy Pi, slow wake) is silently skipped, and no push reads as
+        # "all good". Allow up to 5 minutes late, and never run twice.
+        misfire_grace_time=300,
+        coalesce=True,
     )
     scheduler.start()
     print(f"[scheduler] Afternoon check scheduled for {NOTIFY_HOUR:02d}:{NOTIFY_MINUTE:02d} on weekdays")

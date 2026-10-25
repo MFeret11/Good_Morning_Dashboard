@@ -137,7 +137,8 @@ def get_dashboard(
         overall_status = "error" if window else "idle"
     elif alerts.get("has_critical_alerts"):
         overall_status = "alert"
-    elif commute.get("is_cancelled") or commute.get("connection_cancelled"):
+    elif (commute.get("is_cancelled") or commute.get("connection_cancelled")
+          or commute.get("planned_connection_cancelled")):
         overall_status = "cancelled"
     elif commute.get("is_stalled") or commute.get("connection_is_stalled"):
         overall_status = "stalled"

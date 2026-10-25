@@ -8,7 +8,7 @@ from app.commute import get_commute
 from app.alerts import get_alerts
 from app.config import (
     DEFAULT_WORK_STATION, DEFAULT_HOME_STATION, DEFAULT_TRANSFER_STATION,
-    AFTERNOON_TARGET_DEPARTURE_TIME,
+    AFTERNOON_TARGET_DEPARTURE_TIME, SIGNIFICANT_DELAY_MINUTES,
 )
 from app.notifications import send_notification
 
@@ -80,10 +80,24 @@ def _build_core_message(commute: dict, alerts: dict) -> tuple[str, str, str, lis
         )
 
     if commute.get("is_cancelled") or commute.get("connection_cancelled"):
+        if commute.get("is_cancelled"):
+            what = f"Train {commute.get('origin_train')} is CANCELLED today."
+        else:
+            what = (f"Connecting train {commute.get('connection_train')} at "
+                    f"{commute.get('connection_station')} is CANCELLED today.")
+        backup = commute.get("backup_train_departure")
+        next_step = (f"The next train from your station leaves at {backup}." if backup
+                     else "Check SEPTA for the next train.")
+        return ("TRAIN CANCELLED", f"{what} {next_step}", "urgent", ["x"])
+
+    if commute.get("planned_connection_cancelled"):
         return (
-            "TRAIN CANCELLED",
-            f"Train {commute.get('origin_train')} (or connection) is CANCELLED today. "
-            f"Next backup option departs at {commute.get('backup_train_departure') or 'check SEPTA'}.",
+            "Connection cancelled",
+            f"Your usual connection, train {commute.get('planned_connection_train')} at "
+            f"{commute.get('connection_station')}, is CANCELLED. Take train {commute.get('origin_train')} "
+            f"at {commute.get('origin_actual_departure_time')}, then train {commute.get('connection_train')} "
+            f"at {commute.get('connection_actual_departure_time')}, arriving {commute.get('actual_arrival_time')} "
+            f"(planned {commute.get('planned_arrival_time')}).",
             "urgent",
             ["x"],
         )
@@ -130,17 +144,24 @@ def _build_core_message(commute: dict, alerts: dict) -> tuple[str, str, str, lis
     track_info = f" (Track {conn_track})" if conn_track and conn_track != "TBD" else ""
 
     if commute.get("at_risk"):
+        buffer = round(commute.get("transfer_buffer_minutes", 0))
+        station = commute.get("connection_station", "the transfer point")
+        if buffer < 0:
+            squeeze = (f"It reaches {station} about {-buffer} min after connecting train "
+                       f"{commute.get('connection_train')}{track_info} is due to leave "
+                       f"({commute.get('connection_actual_departure_time')}). You may still make it, "
+                       f"but it's tight.")
+        else:
+            squeeze = f"Only ~{buffer} min to make your connection at {station}{track_info}."
         return (
             "Tight connection today",
-            f"Train {commute.get('origin_train')} departs {commute.get('origin_actual_departure_time')}, "
-            f"running {commute.get('origin_delay_minutes', 0)} min late - only ~"
-            f"{round(commute.get('transfer_buffer_minutes', 0))} min to make your connection at "
-            f"{commute.get('connection_station', 'the transfer point')}{track_info}.",
+            f"Train {commute.get('origin_train')} departs {commute.get('origin_actual_departure_time')}"
+            f"{_late_suffix(commute.get('origin_delay_minutes', 0))}. {squeeze}",
             "high",
             ["warning"],
         )
 
-    if commute.get("connection_delay_minutes", 0) >= 10:
+    if commute.get("connection_delay_minutes", 0) >= SIGNIFICANT_DELAY_MINUTES:
         return (
             "Connecting Train Delayed",
             f"Train {commute.get('connection_train')}{track_info} at {commute.get('connection_station')} is running "
