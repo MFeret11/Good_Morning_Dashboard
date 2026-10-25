@@ -1,6 +1,8 @@
 """SEPTA service alerts, filtered to the two relevant lines and split into
 real-time critical alerts vs. recent (non-stale) standing advisories."""
+import html
 import logging
+import re
 import time
 
 import requests
@@ -12,6 +14,26 @@ log = logging.getLogger(__name__)
 
 _CACHE_TTL = 300  # seconds
 _cache = {"data": None, "fetched_at": 0.0}
+
+
+def clean_alert_text(text) -> str:
+    """SEPTA alert text is HTML; reduce it to plain, single-spaced text."""
+    if not text:
+        return ""
+    clean = html.unescape(str(text))
+    clean = re.sub(r"<[^>]+>", " ", clean)
+    return re.sub(r"\s+", " ", clean).strip()
+
+
+def alert_summary(alert: dict) -> str:
+    """'Line: what SEPTA says', falling back to the raised flags when SEPTA
+    sent no text. Shared by the push and the dashboard so they agree."""
+    line = alert.get("line") or "Regional Rail"
+    text = clean_alert_text(alert.get("alert_text"))
+    if not text:
+        flags = [k.replace("_", " ") for k, v in (alert.get("flags") or {}).items() if v]
+        text = f"Reported {', '.join(flags)}" if flags else "Service disruption"
+    return f"{line}: {text}"
 
 
 def _empty(unavailable: bool = False) -> dict:

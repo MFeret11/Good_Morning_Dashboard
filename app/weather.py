@@ -21,6 +21,25 @@ def _find_severe(hours):
     return hits[0] if hits else None
 
 
+def _hour_label(hour: int) -> str:
+    return f"{hour % 12 or 12}{'AM' if hour < 12 else 'PM'}"
+
+
+RAIN_LIKELY_PERCENT = 50
+
+
+def _commute_warning(hours) -> str | None:
+    """Short phrase for a push or dashboard line, e.g. 'Heavy rain around 5PM'
+    or 'Rain likely (60%)'. None when the commute window looks dry."""
+    severe = _find_severe(hours)
+    if severe:
+        return f"{SEVERE_CODES[severe['code']]} around {_hour_label(severe['hour'])}"
+    chance = max((h["precip_chance"] or 0 for h in hours), default=0)
+    if chance >= RAIN_LIKELY_PERCENT:
+        return f"Rain likely ({chance}%)"
+    return None
+
+
 def get_weather() -> dict:
     now = time.time()
     params = {
@@ -161,5 +180,7 @@ def _summarize(data: dict, stale: bool) -> dict:
         "hourly_detail": day_window,
         "current_temp_f": round(current_temp) if current_temp is not None else None,
         "precip_chance": max_precip_chance,
+        "morning_warning": _commute_warning(morning_window),
+        "evening_warning": _commute_warning(evening_window),
         "weather_stale": stale,
     }

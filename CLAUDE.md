@@ -21,7 +21,7 @@ Rider-specific settings (stations, walk times, target train home, push time, ale
 
 ## Architecture
 
-FastAPI service polled by a Home Assistant REST sensor (`/api/dashboard`), plus an in-process APScheduler job (`scheduler.py`) that runs `afternoon_check.run_afternoon_check` on weekdays at `NOTIFY_TIME` and pushes via ntfy.sh. There is no auth; the container port is bound to `127.0.0.1`.
+FastAPI service polled by a Home Assistant REST sensor (`/api/dashboard`; HA imports only the `commute` section, so `get_dashboard` copies plain-text line alerts into it as `service_alerts`), plus in-process APScheduler jobs (`scheduler.py`, one worker thread): `afternoon_check.run_afternoon_check` on weekdays at `NOTIFY_TIME` pushes via ntfy.sh, then `run_follow_up_check` runs every 5 minutes until the chosen train leaves (or SEPTA lists a different train) and pushes `Update: ...` only when the push ranks higher in `SEVERITY`, is a serious one not yet sent, or the delay grew by 10+ minutes. Follow-up state is in memory, so a restart mid-afternoon ends follow-ups for that day. There is no auth; the container port is bound to `127.0.0.1`.
 
 **Trip planning (`commute.py`, `get_commute`)**
 1. Query SEPTA NextToArrive origin→destination. If any result is direct, pick one and return.

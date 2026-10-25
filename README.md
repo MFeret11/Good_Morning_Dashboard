@@ -23,8 +23,11 @@ Built to be polled by Home Assistant for a wall-mounted dashboard.
   suggestion.
 - **Fails soft.** Caches the last good SEPTA and weather responses and serves
   them when an upstream API times out.
-- **Afternoon notification.** A scheduled job sends one ntfy.sh push each
-  weekday with the recommended train home.
+- **Afternoon notification.** A scheduled job sends an ntfy.sh push each
+  weekday with the recommended train home and any rain or snow on the way.
+  It then re-checks every 5 minutes until that train leaves and pushes again
+  only if things get worse: a cancellation, a stall, a missed connection, a
+  new service alert, or 10 more minutes of delay.
 
 ## API
 

@@ -1,16 +1,17 @@
-"""Builds and sends the daily afternoon commute notification with
-live platform track assignments, detailed alert text, and stall alerts."""
-import html
+"""Builds and sends the afternoon commute notification, then keeps checking
+until the train leaves and pushes again only if things get worse."""
 import logging
-import re
+from datetime import datetime
 
 from app.commute import get_commute
-from app.alerts import get_alerts
+from app.alerts import get_alerts, alert_summary
+from app.weather import get_weather
 from app.config import (
     DEFAULT_WORK_STATION, DEFAULT_HOME_STATION, DEFAULT_TRANSFER_STATION,
-    AFTERNOON_TARGET_DEPARTURE_TIME, SIGNIFICANT_DELAY_MINUTES,
+    AFTERNOON_TARGET_DEPARTURE_TIME, SIGNIFICANT_DELAY_MINUTES, AFTERNOON_END,
 )
 from app.notifications import send_notification
+from app.time_utils import parse_time, anchor_to_today
 
 log = logging.getLogger(__name__)
 
@@ -21,14 +22,63 @@ CHECK_FAILED_MESSAGE = (
     ["warning"],
 )
 
+FOLLOW_UP_PAUSED_MESSAGE = (
+    "Commute updates paused",
+    "Couldn't reach SEPTA for the last two checks, so you won't hear about new "
+    "delays or cancellations. Check SEPTA before you leave.",
+    "default",
+    ["warning"],
+)
 
-def _clean_alert_text(text: str) -> str:
-    if not text:
-        return ""
-    clean = html.unescape(str(text))
-    clean = re.sub(r"<[^>]+>", " ", clean)
-    clean = re.sub(r"\s+", " ", clean).strip()
-    return clean
+# How bad each push is, keyed by title. A follow-up is sent only when the
+# situation ranks higher than the last push, or the delay has grown by
+# FOLLOW_UP_DELAY_STEP_MINUTES at the same rank.
+SEVERITY = {
+    "Commute check failed": -1,
+    "Commute looks good": 0,
+    "Minor delay today": 1,
+    "Running behind today": 2,
+    "Connecting Train Delayed": 2,
+    "Tight connection today": 3,
+    "Train status unclear": 3,
+    "Missed Connection Alert": 4,
+    "Train Stalled on Track": 4,
+    "Connection cancelled": 5,
+    "TRAIN CANCELLED": 5,
+    "SEPTA service alert": 6,
+}
+SERIOUS_SEVERITY = 4  # stalled, missed connection and worse
+FOLLOW_UP_DELAY_STEP_MINUTES = 10
+FOLLOW_UP_FAILURES_BEFORE_NOTICE = 2
+
+# What the last push said, so follow-ups know what the rider already knows.
+_follow_up = {}
+
+
+def _now() -> datetime:
+    """Wall-clock time; a separate function so tests can freeze it."""
+    return datetime.now()
+
+
+def _check_return_commute() -> tuple[dict, dict]:
+    commute = get_commute(
+        DEFAULT_WORK_STATION,
+        DEFAULT_HOME_STATION,
+        target_time=AFTERNOON_TARGET_DEPARTURE_TIME,
+        preferred_transfer=DEFAULT_TRANSFER_STATION,
+    )
+    return commute, get_alerts()
+
+
+def _weather_note() -> str | None:
+    """One line about rain or snow on the way home. Weather is a nice-to-have,
+    so any failure here just leaves the line out."""
+    try:
+        warning = get_weather().get("evening_warning")
+    except Exception:
+        log.exception("Weather lookup for the afternoon push failed")
+        return None
+    return f"Weather: {warning} on the way home." if warning else None
 
 
 def _late_suffix(minutes) -> str:
@@ -59,18 +109,7 @@ def _data_quality_notes(commute: dict, alerts: dict) -> list[str]:
 def _build_core_message(commute: dict, alerts: dict) -> tuple[str, str, str, list[str]]:
     # CRITICAL SERVICE ALERTS (WITH DETAILED LIVE REASON), plus the train to take
     if alerts.get("has_critical_alerts"):
-        alert_lines = []
-        for a in alerts["critical_alerts"]:
-            line = a.get("line", "Regional Rail")
-            clean_text = _clean_alert_text(a.get("alert_text", ""))
-
-            if not clean_text:
-                active_flags = [k.replace("_", " ") for k, v in a.get("flags", {}).items() if v]
-                flag_summary = ", ".join(active_flags) if active_flags else "Service disruption"
-                clean_text = f"Reported {flag_summary}"
-
-            alert_lines.append(f"{line}: {clean_text}")
-
+        alert_lines = [alert_summary(a) for a in alerts["critical_alerts"]]
         alert_lines.append(f"Your train: {_trip_summary(commute)}")
         return (
             "SEPTA service alert",
@@ -222,24 +261,105 @@ def build_afternoon_message(commute: dict, alerts: dict) -> tuple[str, str, str,
     return title, message, priority, tags
 
 
-def run_afternoon_check():
-    # Never let a crash end in silence: no push reads as "all good".
+def _send(title: str, message: str, priority: str, tags: list[str]) -> None:
+    if send_notification(title, message, priority=priority, tags=tags):
+        print(f"[afternoon_check] Notification sent: {title}")
+    else:
+        print(f"[afternoon_check] Notification FAILED to send: {title}")
+
+
+def _follow_up_cutoff(commute: dict, now: datetime) -> datetime:
+    """Follow-ups stop when the train leaves the rider's station: after that
+    SEPTA lists the next train instead, which isn't the one they're on."""
+    window_end = now.replace(hour=AFTERNOON_END, minute=0, second=0, microsecond=0)
     try:
-        commute = get_commute(
-            DEFAULT_WORK_STATION,
-            DEFAULT_HOME_STATION,
-            target_time=AFTERNOON_TARGET_DEPARTURE_TIME,
-            preferred_transfer=DEFAULT_TRANSFER_STATION,
-        )
-        alerts = get_alerts()
+        departure = anchor_to_today(now, parse_time(commute["origin_actual_departure_time"]))
+    except (KeyError, TypeError, ValueError):
+        return window_end
+    return min(departure, window_end)
+
+
+def _remember(title: str, commute: dict | None, now: datetime) -> None:
+    ok = commute is not None and "error" not in commute
+    _follow_up.update({
+        "date": now.date(),
+        "severity": SEVERITY.get(title, 2),
+        "delay": (commute or {}).get("total_delay_minutes", 0) if ok else 0,
+        "train": commute.get("origin_train") if ok else None,
+        "cutoff": _follow_up_cutoff(commute, now) if ok else _follow_up_cutoff({}, now),
+        "failures": 0,
+        "paused_notice_sent": False,
+        "sent_titles": {title},
+    })
+
+
+def run_afternoon_check():
+    """The scheduled afternoon push. Never let a crash end in silence: no push
+    reads as 'all good'."""
+    now = _now()
+    commute = None
+    try:
+        commute, alerts = _check_return_commute()
         title, message, priority, tags = build_afternoon_message(commute, alerts)
+        if "error" not in commute:
+            note = _weather_note()
+            if note:
+                message = f"{message}\n\n{note}"
     except Exception:
         log.exception("Afternoon commute check crashed")
         title, message, priority, tags = CHECK_FAILED_MESSAGE
 
-    success = send_notification(title, message, priority=priority, tags=tags)
+    _send(title, message, priority, tags)
+    _remember(title, commute, now)
 
-    if success:
-        print(f"[afternoon_check] Notification sent: {title}")
-    else:
-        print(f"[afternoon_check] Notification FAILED to send: {title}")
+
+def run_follow_up_check():
+    """Runs every few minutes after the afternoon push until the train
+    leaves. Pushes again only if things got worse than the last push said."""
+    now = _now()
+    state = _follow_up
+    if state.get("date") != now.date() or now >= state["cutoff"]:
+        return
+
+    try:
+        commute, alerts = _check_return_commute()
+        if "error" in commute:
+            raise RuntimeError(commute["error"])
+    except Exception as e:
+        log.warning("Follow-up commute check failed: %s", e)
+        state["failures"] += 1
+        if (state["failures"] >= FOLLOW_UP_FAILURES_BEFORE_NOTICE
+                and not state["paused_notice_sent"] and state["severity"] >= 0):
+            state["paused_notice_sent"] = True
+            _send(*FOLLOW_UP_PAUSED_MESSAGE)
+        return
+    state["failures"] = 0
+
+    if state["train"] is not None and commute.get("origin_train") != state["train"]:
+        # The rider's train has left (SEPTA now lists the next one).
+        state["cutoff"] = now
+        return
+
+    title, message, priority, tags = build_afternoon_message(commute, alerts)
+    severity = SEVERITY.get(title, 2)
+    delay = commute.get("total_delay_minutes", 0)
+    worse = (
+        severity > state["severity"]
+        # A serious problem the rider hasn't heard about yet, e.g. a
+        # cancellation after a service-alert push. Each is sent once.
+        or (severity >= SERIOUS_SEVERITY and title not in state["sent_titles"])
+        or (severity == state["severity"] and severity > 0
+            and delay >= state["delay"] + FOLLOW_UP_DELAY_STEP_MINUTES)
+    )
+    if not worse:
+        return
+
+    _send(f"Update: {title}", message, priority, tags)
+    state["sent_titles"].add(title)
+    state.update({
+        "severity": max(severity, state["severity"]),
+        "delay": delay,
+        "train": commute.get("origin_train"),
+        "cutoff": _follow_up_cutoff(commute, now),
+        "paused_notice_sent": False,
+    })

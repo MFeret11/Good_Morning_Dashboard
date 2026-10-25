@@ -71,3 +71,21 @@ def test_error_payload_falls_back_to_last_forecast_marked_stale():
 
 def test_fresh_forecast_is_not_marked_stale():
     assert weather_for({}, temp=55)["weather_stale"] is False
+
+
+def test_evening_rain_becomes_a_short_warning():
+    w = weather_for({17: 65}, temp=55)
+    assert w["evening_warning"] == "Heavy rain around 5PM"
+    assert w["morning_warning"] is None
+
+
+def test_likely_rain_without_a_severe_code_still_warns():
+    w = weather_for({}, temp=55)
+    assert w["morning_warning"] is None
+    resp = MagicMock()
+    data = forecast({}, 55)
+    data["hourly"]["precipitation_probability"] = [60 if h == 7 else 0 for h in range(24)]
+    resp.json.return_value = data
+    app.weather._WEATHER_CACHE.clear()
+    with patch("app.weather.requests.get", return_value=resp):
+        assert get_weather()["morning_warning"] == "Rain likely (60%)"

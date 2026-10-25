@@ -11,7 +11,7 @@ from app.config import (
     AFTERNOON_TARGET_DEPARTURE_TIME,
 )
 from app.commute import get_commute
-from app.alerts import get_alerts
+from app.alerts import get_alerts, alert_summary
 from app.weather import get_weather
 from app.scheduler import start_scheduler
 from app.afternoon_check import run_afternoon_check
@@ -153,6 +153,10 @@ def get_dashboard(
 
     # Strip heavy nested arrays from top-level summary payload
     commute_display = {k: v for k, v in commute.items() if k != "alternatives"}
+    # Home Assistant imports only the commute section, so the line alerts the
+    # cards must show ride along here, already reduced to plain text.
+    commute_display["service_alerts"] = [alert_summary(a) for a in alerts.get("critical_alerts", [])]
+    commute_display["alerts_unavailable"] = bool(alerts.get("alerts_unavailable"))
     weather_display = {k: v for k, v in weather.items() if k != "hourly_detail"}
 
     return {
