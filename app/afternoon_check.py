@@ -94,6 +94,24 @@ def _trip_summary(commute: dict) -> str:
     )
 
 
+# Options listed only when the connection clearly works: not tight, not
+# cancelled, and SEPTA's delay text readable on both legs.
+SURE_OPTION_STATUSES = {"ok", "delayed"}
+
+
+def _other_trains(commute: dict) -> list[str]:
+    """The next trains after the planned one, so the rider knows when they'd
+    get home if they catch an earlier or later train than assumed."""
+    options = [
+        o for o in (commute.get("itineraries") or [])[1:]
+        if o.get("status") in SURE_OPTION_STATUSES and o.get("actual_arrival_time")
+    ]
+    if not options:
+        return []
+    parts = [f"{o['origin_actual_departure']} → home {o['actual_arrival_time']}" for o in options[:2]]
+    return ["If you take a later train: " + " · ".join(parts)]
+
+
 def _transfer_notes(commute: dict) -> list[str]:
     """Says so when the plan changes trains somewhere other than the usual
     station, because no connection works there right now."""
@@ -279,7 +297,7 @@ def build_afternoon_message(commute: dict, alerts: dict) -> tuple[str, str, str,
         )
 
     title, message, priority, tags = _build_core_message(commute, alerts)
-    notes = [*_transfer_notes(commute), *_data_quality_notes(commute, alerts)]
+    notes = [*_other_trains(commute), *_transfer_notes(commute), *_data_quality_notes(commute, alerts)]
     if notes:
         message = "\n\n".join([message, *notes])
     return title, message, priority, tags

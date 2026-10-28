@@ -136,3 +136,43 @@ def test_moving_back_to_the_usual_station_says_so(monkeypatch):
     sent = follow(monkeypatch, [trip_via("Suburban Station", True), trip_via("Jefferson Station", False)])
     assert len(sent) == 2
     assert "Change trains at Jefferson Station." in sent[1][1]
+
+
+# ---- Other trains listed in the push ----
+
+def option(n, dep, arr, status="ok"):
+    return {"option": n, "origin_actual_departure": dep, "actual_arrival_time": arr, "status": status}
+
+
+def base_trip(itineraries):
+    trip = trip_via("Jefferson Station", False)
+    trip["itineraries"] = itineraries
+    return trip
+
+
+def test_push_lists_the_next_trains_that_surely_connect():
+    trip = base_trip([option(1, "5:15PM", "6:20PM"), option(2, "5:45PM", "6:50PM"),
+                      option(3, "6:15PM", "7:20PM", "delayed")])
+    _, message, _, _ = build_afternoon_message(trip, NO_ALERTS)
+    assert "If you take a later train: 5:45PM → home 6:50PM · 6:15PM → home 7:20PM" in message
+
+
+def test_tight_cancelled_or_unclear_options_are_left_out():
+    trip = base_trip([option(1, "5:15PM", "6:20PM"), option(2, "5:45PM", "6:50PM", "at_risk"),
+                      option(3, "6:15PM", "7:20PM", "cancelled"), option(4, "6:45PM", "7:50PM", "unclear")])
+    _, message, _, _ = build_afternoon_message(trip, NO_ALERTS)
+    assert "later train" not in message
+
+
+def test_real_plan_lists_only_catchable_later_options():
+    trip = afternoon({
+        ("Ambler", "Jefferson Station"): [leg("9254", "5:15PM", "5:35PM"), leg("9258", "5:45PM", "6:05PM"),
+                                          leg("9262", "6:15PM", "6:35PM")],
+        ("Jefferson Station", "Glenside"): [leg("3560", "5:45PM", "6:20PM"), leg("3564", "6:03PM", "6:40PM"),
+                                            leg("3568", "6:45PM", "7:20PM")],
+    })
+    # 9258 reaches Jefferson at 6:05, two minutes after 3564 is due out: tight, so not listed.
+    # 9262 reaches it at 6:35 and makes the 6:45 with ten minutes to spare.
+    _, message, _, _ = build_afternoon_message(trip, NO_ALERTS)
+    assert "If you take a later train: 6:15PM → home 7:20PM" in message
+    assert "6:05" not in message and "5:45PM → home" not in message
