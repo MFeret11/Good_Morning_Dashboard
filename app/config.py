@@ -82,6 +82,12 @@ MISSED_CONNECTION_BUFFER_MINUTES = -5 # Floor below which connection is uncatcha
 # --- Active Commute Windows (24hr clock) ---
 MORNING_START, MORNING_END = 5, 9
 AFTERNOON_START, AFTERNOON_END = 14, 19
+# When /api/dashboard looks up trains for the kitchen display. Narrower than
+# the windows above (which also set the weather windows and how late
+# follow-up pushes can run), because the display only shows the commute card
+# 6-8 AM and 4-6 PM; outside these hours the dashboard calls SEPTA not at all.
+DASHBOARD_MORNING_START, DASHBOARD_MORNING_END = 6, 8
+DASHBOARD_AFTERNOON_START, DASHBOARD_AFTERNOON_END = 14, 18
 
 # --- Polling Cadence ---
 ACTIVE_POLL_INTERVAL_MS = 60_000      # 1 min during commute

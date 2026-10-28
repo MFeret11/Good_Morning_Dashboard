@@ -54,3 +54,23 @@ def test_no_septa_calls_outside_commute_hours(monkeypatch):
     assert trips.call_count == 0 and alerts.call_count == 0
     assert result["overall_status"] == "idle"
     assert result["commute"]["service_alerts"] == []
+
+
+def window_at(monkeypatch, weekday_hour):
+    class Fixed(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 1, 5, *weekday_hour)  # a Monday
+    monkeypatch.setattr(app.main, "datetime", Fixed)
+    return app.main.get_active_window()
+
+
+def test_dashboard_looks_up_trains_only_around_the_commute(monkeypatch):
+    assert window_at(monkeypatch, (5, 59)) is None
+    assert window_at(monkeypatch, (6, 0)) == "morning"
+    assert window_at(monkeypatch, (7, 59)) == "morning"
+    assert window_at(monkeypatch, (8, 0)) is None
+    assert window_at(monkeypatch, (13, 59)) is None
+    assert window_at(monkeypatch, (14, 0)) == "afternoon"
+    assert window_at(monkeypatch, (17, 59)) == "afternoon"
+    assert window_at(monkeypatch, (18, 0)) is None

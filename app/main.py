@@ -6,7 +6,7 @@ from fastapi import FastAPI, Query
 
 from app.config import (
     DEFAULT_HOME_STATION, DEFAULT_WORK_STATION, DEFAULT_TRANSFER_STATION,
-    MORNING_START, MORNING_END, AFTERNOON_START, AFTERNOON_END,
+    DASHBOARD_MORNING_START, DASHBOARD_MORNING_END, DASHBOARD_AFTERNOON_START, DASHBOARD_AFTERNOON_END,
     ACTIVE_POLL_INTERVAL_MS, IDLE_POLL_INTERVAL_MS,
     AFTERNOON_TARGET_DEPARTURE_TIME,
 )
@@ -39,9 +39,9 @@ def get_active_window() -> str | None:
     if now.weekday() >= 5:  # Saturday=5, Sunday=6
         return None
     hour = now.hour
-    if MORNING_START <= hour < MORNING_END:
+    if DASHBOARD_MORNING_START <= hour < DASHBOARD_MORNING_END:
         return "morning"
-    elif AFTERNOON_START <= hour < AFTERNOON_END:
+    elif DASHBOARD_AFTERNOON_START <= hour < DASHBOARD_AFTERNOON_END:
         return "afternoon"
     return None
 
