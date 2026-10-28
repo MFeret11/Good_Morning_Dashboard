@@ -59,6 +59,13 @@ SEPTA_BASE = "https://www3.septa.org/api"
 DEFAULT_HOME_STATION = _env("HOME_STATION", "Glenside")
 DEFAULT_WORK_STATION = _env("WORK_STATION", "Suburban Station")
 DEFAULT_TRANSFER_STATION = _env("TRANSFER_STATION", "Jefferson Station")
+# Tried in order when no connection works at TRANSFER_STATION. Every
+# Regional Rail line runs through these Center City stations.
+TRANSFER_FALLBACK_STATIONS = [
+    station.strip()
+    for station in _env("TRANSFER_FALLBACK_STATIONS", "Suburban Station,30th Street Station").split(",")
+    if station.strip()
+]
 
 # --- Walk times (minutes) to each station, keyed by origin station ---
 WALK_TIMES = _env_walk_times("WALK_TIMES", "Glenside:5,Suburban Station:5,Jefferson Station:3")

@@ -8,6 +8,7 @@ os.environ.update({
     "HOME_STATION": "Glenside",
     "WORK_STATION": "Ambler",
     "TRANSFER_STATION": "Jefferson Station",
+    "TRANSFER_FALLBACK_STATIONS": "Suburban Station,30th Street Station",
     "WALK_TIMES": "Glenside:5,Ambler:15,Jefferson Station:3",
     "AFTERNOON_TARGET_DEPARTURE": "5:00PM",
     "NOTIFY_TIME": "4:00PM",

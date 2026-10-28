@@ -94,6 +94,15 @@ def _trip_summary(commute: dict) -> str:
     )
 
 
+def _transfer_notes(commute: dict) -> list[str]:
+    """Says so when the plan changes trains somewhere other than the usual
+    station, because no connection works there right now."""
+    if not commute.get("transfer_fallback"):
+        return []
+    usual, station = commute.get("preferred_transfer_station"), commute.get("connection_station")
+    return [f"No connection works at {usual} right now, so change trains at {station} instead."]
+
+
 def _data_quality_notes(commute: dict, alerts: dict) -> list[str]:
     """Caveats appended to every message, so a degraded upstream never reads
     as a clean bill of health."""
@@ -270,7 +279,7 @@ def build_afternoon_message(commute: dict, alerts: dict) -> tuple[str, str, str,
         )
 
     title, message, priority, tags = _build_core_message(commute, alerts)
-    notes = _data_quality_notes(commute, alerts)
+    notes = [*_transfer_notes(commute), *_data_quality_notes(commute, alerts)]
     if notes:
         message = "\n\n".join([message, *notes])
     return title, message, priority, tags
@@ -324,6 +333,7 @@ def _remember(title: str, commute: dict | None, now: datetime) -> None:
         # The latest plan for a transfer trip, used to follow the connection
         # once the first train has left.
         "trip": commute if ok and _is_transfer(commute) else None,
+        "station": commute.get("connection_station") if ok else None,
         "ride_cutoff": _ride_cutoff(commute, now) if ok and _is_transfer(commute) else None,
         "failures": 0,
         "paused_notice_sent": False,
@@ -409,8 +419,12 @@ def run_follow_up_check():
     title, message, priority, tags = build_afternoon_message(commute, alerts)
     severity = SEVERITY.get(title, 2)
     delay = commute.get("total_delay_minutes", 0)
+    station = commute.get("connection_station")
+    moved = (not riding and state.get("station") is not None and station is not None
+             and station != state["station"])
     worse = (
-        severity > state["severity"]
+        moved  # the rider needs to change trains somewhere else now
+        or severity > state["severity"]
         # A serious problem the rider hasn't heard about yet, e.g. a
         # cancellation after a service-alert push. Each is sent once.
         or (severity >= SERIOUS_SEVERITY and title not in state["sent_titles"])
@@ -420,12 +434,15 @@ def run_follow_up_check():
     if not worse:
         return
 
+    if moved and station not in message:
+        message = f"{message}\n\nChange trains at {station}."
     _send(f"Update: {title}", message, priority, tags)
     state["sent_titles"].add(title)
     state.update({
         "severity": max(severity, state["severity"]),
         "delay": delay,
         "paused_notice_sent": False,
+        "station": station or state.get("station"),
     })
     if not riding:
         state.update({"train": commute.get("origin_train"), "cutoff": _follow_up_cutoff(commute, now)})

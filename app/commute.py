@@ -9,7 +9,7 @@ import requests
 from app.config import (
     SEPTA_BASE, WALK_TIMES, DEFAULT_WALK_TIME_MINUTES, RISK_BUFFER_MINUTES,
     SIGNIFICANT_DELAY_MINUTES, LEAVE_NOW_THRESHOLD_MINUTES, LEAVE_BY_GRACE_MINUTES,
-    MISSED_CONNECTION_BUFFER_MINUTES, DEFAULT_TRANSFER_STATION,
+    MISSED_CONNECTION_BUFFER_MINUTES, DEFAULT_TRANSFER_STATION, TRANSFER_FALLBACK_STATIONS,
 )
 from app.time_utils import (
     parse_time, parse_delay_minutes, format_time_no_leading_zero, anchor_to_today,
@@ -518,31 +518,56 @@ def get_commute(
         trip["data_stale"] = stale
         return trip
 
-    # 2. Transfer Trips (Pre-fetch once)
-    leg1_results, leg1_stale = _fetch_trips(origin, transfer_station)
-    if not leg1_results:
-        return septa_fallback("No trips found", raw_stale or leg1_stale)
+    # 2. Transfer trips: the preferred transfer station first; if no
+    # connection works there, the other Center City stations in order.
+    fallbacks = [s for s in TRANSFER_FALLBACK_STATIONS if s not in (transfer_station, origin, destination)]
+    first_error = None
+    for station in [transfer_station, *fallbacks]:
+        trip, error, stale = _plan_via(station, origin, destination, target_time, walk_time)
+        if trip is not None:
+            trip["data_stale"] = raw_stale or stale
+            trip["preferred_transfer_station"] = transfer_station
+            trip["transfer_fallback"] = station != transfer_station
+            return trip
+        first_error = first_error or (error, stale)
 
-    leg2_results, leg2_stale = _fetch_trips(transfer_station, destination)
-    data_stale = raw_stale or leg1_stale or leg2_stale
+    # No station worked (often SEPTA's list of connecting trains ends before
+    # leg 1 reaches the transfer station, so the real connection isn't
+    # visible yet). Don't call that a missed connection; use SEPTA's own pick.
+    error, stale = first_error
+    trip = septa_fallback(error, raw_stale or stale)
+    if "error" not in trip:
+        trip["preferred_transfer_station"] = transfer_station
+        trip["transfer_fallback"] = trip.get("connection_station") != transfer_station
+    return trip
+
+
+def _plan_via(
+    station: str, origin: str, destination: str, target_time: str | None, walk_time: int,
+) -> tuple[dict | None, str | None, bool]:
+    """Plans the trip with a transfer at `station`. Returns (trip, None, stale)
+    or (None, why_not, stale)."""
+    leg1_results, leg1_stale = _fetch_trips(origin, station)
+    if not leg1_results:
+        return None, "No trips found", leg1_stale
+
+    leg2_results, leg2_stale = _fetch_trips(station, destination)
+    stale = leg1_stale or leg2_stale
     if not leg2_results:
-        return septa_fallback(f"No connecting trains found at {transfer_station}", data_stale)
+        return None, f"No connecting trains found at {station}", stale
 
     leg1 = _pick(leg1_results, target_time, walk_time)
     plan = _plan_connection(leg1, leg2_results)
     if plan is None:
-        # SEPTA's list of connecting trains ends before leg 1 reaches the
-        # transfer station, so the real connection isn't visible yet. Don't
-        # call that a missed connection; use SEPTA's own pick instead.
-        return septa_fallback("No viable connections found", data_stale)
+        return None, "No viable connections found", stale
 
     trip = _assemble_transfer_trip(
-        leg1, plan, leg2_results, transfer_station, walk_time,
+        leg1, plan, leg2_results, station, walk_time,
         backup_departure=_next_backup_departure(leg1_results, leg1),
-        data_stale=data_stale,
+        data_stale=stale,
     )
     trip["itineraries"] = _transfer_itineraries(leg1_results, leg1, leg2_results)
-    return trip
+    return trip, None, stale
 
 
 def get_connection_update(trip: dict, destination: str, fallback_late: int | None = None) -> dict:
