@@ -32,11 +32,19 @@ def reset_module_caches():
     test so one test's mocked response can't leak into the next."""
     app.alerts._cache.update({"data": None, "fetched_at": 0.0})
     app.commute._TRIP_CACHE.clear()
+    app.commute._TRIP_RECENT.clear()
     app.commute._TRAIN_POSITIONS.clear()
     app.commute._TRAINVIEW_CACHE = ([], 0.0)
     app.weather._WEATHER_CACHE.clear()
     app.afternoon_check._follow_up.clear()
     yield
+
+
+@pytest.fixture(autouse=True)
+def fetch_every_time(monkeypatch):
+    """Most tests swap SEPTA's answer between two lookups of the same stations,
+    so reusing a recent answer is off by default; test_api_usage.py turns it on."""
+    monkeypatch.setattr(app.commute, "TRIP_FRESH_SECONDS", 0)
 
 
 @pytest.fixture(autouse=True)

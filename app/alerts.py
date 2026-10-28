@@ -46,6 +46,12 @@ def _empty(unavailable: bool = False) -> dict:
     }
 
 
+def no_alerts() -> dict:
+    """An empty result for callers that skip the lookup (outside commute
+    hours), without calling SEPTA."""
+    return _empty()
+
+
 def _fetch_alerts_raw():
     resp = requests.get(f"{SEPTA_BASE}/Alerts/index.php", timeout=10)
     resp.raise_for_status()

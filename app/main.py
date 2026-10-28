@@ -11,7 +11,7 @@ from app.config import (
     AFTERNOON_TARGET_DEPARTURE_TIME,
 )
 from app.commute import get_commute
-from app.alerts import get_alerts, alert_summary
+from app.alerts import get_alerts, alert_summary, no_alerts
 from app.weather import get_weather
 from app.scheduler import start_scheduler
 from app.afternoon_check import run_afternoon_check
@@ -129,7 +129,9 @@ def get_dashboard(
     else:
         commute = {"error": "Outside active commute windows"}
 
-    alerts = get_alerts()
+    # Outside commute hours nothing shows the alerts, so don't ask SEPTA for
+    # them every time Home Assistant polls.
+    alerts = get_alerts() if "error" not in commute or window else no_alerts()
     weather = get_weather()
 
     # Determine unified priority status for dashboard headers & chips

@@ -19,12 +19,17 @@ from app.time_utils import (
 log = logging.getLogger(__name__)
 
 # In-Memory Caches
+_TRIP_RECENT: dict = {}  # (origin, destination) -> (trips, fetched_at), for skipping repeat calls
 _TRIP_CACHE = {}          # (origin, destination) -> (data, timestamp)
 _TRAIN_POSITIONS = {}     # train_no -> {"stop": str, "lat": float, "lon": float, "first_seen_at": float}
 _TRAINVIEW_CACHE = ([], 0.0) # (trains_list, timestamp)
 
 CACHE_TTL_SECONDS = 300
-TRAINVIEW_TTL_SECONDS = 15
+# Home Assistant polls every 30 s and the follow-ups share the same lookups, so
+# an answer this recent is reused instead of calling SEPTA again. Train times
+# move by the minute, so nothing on the display gets less accurate.
+TRIP_FRESH_SECONDS = 60
+TRAINVIEW_TTL_SECONDS = 60
 STALL_THRESHOLD_SECONDS = 600
 
 # NextToArrive reads the result count from req3. It ignores "top" and
@@ -45,6 +50,9 @@ def _fetch_trips(origin: str, destination: str) -> tuple[list | None, bool]:
     apart from 'no trains'."""
     cache_key = (origin, destination)
     now = time.time()
+    recent = _TRIP_RECENT.get(cache_key)
+    if recent and (now - recent[1]) <= TRIP_FRESH_SECONDS:
+        return recent[0], False
     params = {"req1": origin, "req2": destination, "req3": TRIP_RESULT_COUNT}
 
     try:
@@ -60,6 +68,9 @@ def _fetch_trips(origin: str, destination: str) -> tuple[list | None, bool]:
             return cached[0], True
         return None, False
 
+    _TRIP_RECENT[cache_key] = (data, now)  # any answer, empty included, for reuse within TRIP_FRESH_SECONDS
+    for key in [k for k, (_, ts) in _TRIP_RECENT.items() if now - ts > TRIP_FRESH_SECONDS]:
+        del _TRIP_RECENT[key]
     if data:
         _TRIP_CACHE[cache_key] = (data, now)
         # /api/commute accepts any station pair, so drop expired entries to
@@ -70,12 +81,12 @@ def _fetch_trips(origin: str, destination: str) -> tuple[list | None, bool]:
 
 
 def _get_trainview_feed() -> list:
-    """Fetches TrainView with a 15-second cache to prevent multi-download storms."""
+    """Fetches TrainView, reusing a fetch younger than TRAINVIEW_TTL_SECONDS."""
     global _TRAINVIEW_CACHE
     now = time.time()
     cached_data, cached_at = _TRAINVIEW_CACHE
 
-    if cached_data and (now - cached_at) <= TRAINVIEW_TTL_SECONDS:
+    if cached_at and (now - cached_at) <= TRAINVIEW_TTL_SECONDS:
         return cached_data
 
     try:

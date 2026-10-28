@@ -2,6 +2,7 @@
 no longer lists that train, so its delay comes from TrainView's `late` field."""
 from unittest.mock import MagicMock, patch
 
+import app.commute
 from app.afternoon_check import build_afternoon_message
 from app.commute import get_commute, get_connection_update
 
@@ -38,6 +39,7 @@ def planned_trip():
                            preferred_transfer="Jefferson Station")
     assert trip["connection_train"] == "3560"
     assert trip["origin_arrival_time"] == "5:35PM"
+    app.commute._TRAINVIEW_CACHE = ([], 0.0)  # the ride starts later, with a fresh TrainView
     return trip
 
 
