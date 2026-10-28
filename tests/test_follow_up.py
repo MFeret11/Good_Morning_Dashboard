@@ -18,6 +18,7 @@ def commute(**overrides):
         "origin_actual_departure_time": "5:15PM", "origin_delay_minutes": 0,
         "actual_arrival_time": "6:20PM", "arrival_time": "6:20PM",
         "planned_arrival_time": "6:20PM", "total_delay_minutes": 0,
+        "origin_departure_time": "5:15PM", "origin_arrival_time": "5:35PM",
         "connection_station": "Center Station", "connection_train": "2002",
         "connection_actual_departure_time": "5:45PM", "transfer_buffer_minutes": 10.0,
     }
@@ -34,9 +35,13 @@ class Day:
         self.result = (commute(), NO_ALERTS)
         self.weather = {}
         self.checks = 0
+        self.ride = commute()       # what get_connection_update returns once on the first train
+        self.rides = []             # (trip, fallback_late) for each connection check
         monkeypatch.setattr(ac, "_now", lambda: self.now)
         monkeypatch.setattr(ac, "_check_return_commute", self._check)
         monkeypatch.setattr(ac, "get_weather", lambda: self.weather)
+        monkeypatch.setattr(ac, "get_alerts", lambda: NO_ALERTS)
+        monkeypatch.setattr(ac, "get_connection_update", self._ride)
         monkeypatch.setattr(ac, "send_notification",
                             lambda title, message, **kw: self.sent.append((title, message)) or True)
 
@@ -45,6 +50,12 @@ class Day:
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
+
+    def _ride(self, trip, destination, fallback_late=None):
+        self.rides.append((trip, fallback_late))
+        if isinstance(self.ride, Exception):
+            raise self.ride
+        return self.ride
 
     def at(self, hhmm, result=None):
         hour, minute = map(int, hhmm.split(":"))
@@ -97,7 +108,8 @@ def test_improvement_is_not_pushed(day):
     assert day.titles() == ["Running behind today"]
 
 
-def test_follow_ups_stop_once_the_train_leaves(day):
+def test_direct_trip_follow_ups_stop_once_the_train_leaves(day):
+    day.result = (commute(trip_type="direct", connection_station=None), NO_ALERTS)
     ac.run_afternoon_check()
     day.checks = 0
     day.at("17:15", (commute(is_cancelled=True), NO_ALERTS))
@@ -106,9 +118,11 @@ def test_follow_ups_stop_once_the_train_leaves(day):
     assert day.titles() == ["Commute looks good"]
 
 
-def test_follow_ups_stop_when_septa_lists_the_next_train(day):
+def test_direct_trip_follow_ups_stop_when_septa_lists_the_next_train(day):
+    day.result = (commute(trip_type="direct", connection_station=None), NO_ALERTS)
     ac.run_afternoon_check()
-    day.at("17:00", (commute(origin_train="1003", is_cancelled=True), NO_ALERTS))
+    day.at("17:00", (commute(trip_type="direct", connection_station=None,
+                             origin_train="1003", is_cancelled=True), NO_ALERTS))
     ac.run_follow_up_check()
     day.at("17:05")
     ac.run_follow_up_check()
@@ -209,3 +223,78 @@ def test_dashboard_carries_plain_alert_text_for_home_assistant(*_):
     assert d["commute"]["service_alerts"] == ["Line A: Suspended near Center"]
     assert d["commute"]["alerts_unavailable"] is False
     assert d["overall_status"] == "alert"
+
+
+# ---- On the first train: following the connection ----
+
+def test_cancelled_connection_is_pushed_while_on_the_first_train(day):
+    ac.run_afternoon_check()
+    day.at("17:20")  # the 5:15 has left
+    day.ride = commute(connection_cancelled=True, backup_train_departure="5:30PM")
+    ac.run_follow_up_check()
+    assert day.titles() == ["Commute looks good", "Update: TRAIN CANCELLED"]
+    assert day.rides[0][0]["origin_train"] == "1001"
+
+
+def test_missed_connection_is_pushed_while_on_the_first_train(day):
+    ac.run_afternoon_check()
+    day.at("17:25")
+    day.ride = commute(origin_delay_minutes=16, missed_connection=True, connection_train="2004",
+                       connection_actual_departure_time="6:15PM", actual_arrival_time="6:50PM",
+                       total_delay_minutes=30, delayed=True)
+    ac.run_follow_up_check()
+    assert day.titles() == ["Commute looks good", "Update: Missed Connection Alert"]
+    assert "2004" in day.sent[1][1]
+
+
+def test_switches_to_the_connection_when_septa_lists_the_next_train(day):
+    ac.run_afternoon_check()
+    day.ride = commute(connection_cancelled=True)
+    day.at("17:10", (commute(origin_train="1003"), NO_ALERTS))  # the 5:15 left early
+    ac.run_follow_up_check()
+    assert len(day.rides) == 1  # checked the connection right away
+    assert day.titles()[-1] == "Update: TRAIN CANCELLED"
+
+
+def test_connection_follow_ups_stop_once_the_connection_leaves(day):
+    ac.run_afternoon_check()
+    day.at("17:20")
+    ac.run_follow_up_check()
+    day.at("17:50")  # the 5:45 connection has left
+    ac.run_follow_up_check()
+    assert len(day.rides) == 1
+
+
+def test_later_connection_extends_the_follow_ups(day):
+    ac.run_afternoon_check()
+    day.at("17:25")
+    day.ride = commute(missed_connection=True, connection_train="2004",
+                       connection_actual_departure_time="6:15PM", total_delay_minutes=30)
+    ac.run_follow_up_check()
+    day.at("17:55")
+    ac.run_follow_up_check()
+    assert len(day.rides) == 2
+
+
+def test_lost_train_before_the_transfer_is_a_failure(day):
+    ac.run_afternoon_check()
+    for t in ("17:20", "17:25"):
+        day.at(t)
+        day.ride = {"error": "Train 1001 has no live position"}
+        ac.run_follow_up_check()
+    assert [fb for _, fb in day.rides] == [None, None]
+    assert day.titles() == ["Commute looks good", "Commute updates paused"]
+
+
+def test_last_known_delay_is_used_once_the_train_should_have_arrived(day):
+    ac.run_afternoon_check()
+    day.at("17:36")  # scheduled at the transfer station at 5:35
+    ac.run_follow_up_check()
+    assert day.rides[0][1] == 0
+
+
+def test_late_first_train_that_still_connects_does_not_buzz(day):
+    ac.run_afternoon_check()
+    day.at("16:40", (commute(origin_delay_minutes=4, origin_actual_departure_time="5:19PM"), NO_ALERTS))
+    ac.run_follow_up_check()
+    assert day.titles() == ["Commute looks good"]

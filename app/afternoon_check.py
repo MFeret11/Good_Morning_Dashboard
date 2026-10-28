@@ -1,9 +1,9 @@
 """Builds and sends the afternoon commute notification, then keeps checking
 until the train leaves and pushes again only if things get worse."""
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from app.commute import get_commute
+from app.commute import get_commute, get_connection_update
 from app.alerts import get_alerts, alert_summary
 from app.weather import get_weather
 from app.config import (
@@ -36,6 +36,7 @@ FOLLOW_UP_PAUSED_MESSAGE = (
 SEVERITY = {
     "Commute check failed": -1,
     "Commute looks good": 0,
+    "Late but still connecting": 0,  # first train late, arrival unchanged
     "Minor delay today": 1,
     "Running behind today": 2,
     "Connecting Train Delayed": 2,
@@ -226,7 +227,21 @@ def _build_core_message(commute: dict, alerts: dict) -> tuple[str, str, str, lis
     origin_delay = commute.get("origin_delay_minutes", 0)
     total_delay = commute.get("total_delay_minutes", 0)
 
-    if not origin_delay and not total_delay:
+    if not total_delay and origin_delay:
+        # The first train is late but still makes the planned connection, so
+        # the rider gets home as planned. Its own title ranks with "looks
+        # good", so a follow-up doesn't buzz for it, and the message still
+        # says the train is late (never "on time").
+        return (
+            "Late but still connecting",
+            f"Train {commute.get('origin_train')}{track_str} departs {commute.get('origin_actual_departure_time')}"
+            f"{_late_suffix(origin_delay)} but still makes the connection, arriving "
+            f"{commute.get('actual_arrival_time')} as planned.",
+            "default",
+            ["white_check_mark"],
+        )
+
+    if not total_delay:
         return (
             "Commute looks good",
             f"Train {commute.get('origin_train')}{track_str} departs {commute.get('origin_actual_departure_time')}, "
@@ -268,15 +283,34 @@ def _send(title: str, message: str, priority: str, tags: list[str]) -> None:
         print(f"[afternoon_check] Notification FAILED to send: {title}")
 
 
-def _follow_up_cutoff(commute: dict, now: datetime) -> datetime:
-    """Follow-ups stop when the train leaves the rider's station: after that
-    SEPTA lists the next train instead, which isn't the one they're on."""
-    window_end = now.replace(hour=AFTERNOON_END, minute=0, second=0, microsecond=0)
+def _window_end(now: datetime) -> datetime:
+    return now.replace(hour=AFTERNOON_END, minute=0, second=0, microsecond=0)
+
+
+def _at_today(now: datetime, commute: dict, key: str) -> datetime | None:
     try:
-        departure = anchor_to_today(now, parse_time(commute["origin_actual_departure_time"]))
+        return anchor_to_today(now, parse_time(commute[key]))
     except (KeyError, TypeError, ValueError):
-        return window_end
-    return min(departure, window_end)
+        return None
+
+
+def _follow_up_cutoff(commute: dict, now: datetime) -> datetime:
+    """When the first train leaves the rider's station. After that SEPTA's
+    NextToArrive lists the next train instead, so a transfer trip switches
+    to following the connection (_ride_cutoff) and a direct trip stops."""
+    departure = _at_today(now, commute, "origin_actual_departure_time")
+    return min(departure, _window_end(now)) if departure else _window_end(now)
+
+
+def _ride_cutoff(commute: dict, now: datetime) -> datetime:
+    """While the rider is on the first train, follow-ups run until the
+    connecting train leaves the transfer station."""
+    departure = _at_today(now, commute, "connection_actual_departure_time")
+    return min(departure, _window_end(now)) if departure else _window_end(now)
+
+
+def _is_transfer(commute: dict | None) -> bool:
+    return bool(commute) and commute.get("trip_type") == "transfer" and bool(commute.get("connection_station"))
 
 
 def _remember(title: str, commute: dict | None, now: datetime) -> None:
@@ -287,6 +321,10 @@ def _remember(title: str, commute: dict | None, now: datetime) -> None:
         "delay": (commute or {}).get("total_delay_minutes", 0) if ok else 0,
         "train": commute.get("origin_train") if ok else None,
         "cutoff": _follow_up_cutoff(commute, now) if ok else _follow_up_cutoff({}, now),
+        # The latest plan for a transfer trip, used to follow the connection
+        # once the first train has left.
+        "trip": commute if ok and _is_transfer(commute) else None,
+        "ride_cutoff": _ride_cutoff(commute, now) if ok and _is_transfer(commute) else None,
         "failures": 0,
         "paused_notice_sent": False,
         "sent_titles": {title},
@@ -313,16 +351,37 @@ def run_afternoon_check():
     _remember(title, commute, now)
 
 
+def _check_connection(trip: dict, now: datetime) -> tuple[dict, dict]:
+    """The rider is on the first train: re-plan the connection from its live
+    delay. If TrainView has dropped the train after it should have reached the
+    transfer station (some trains end there), the last known delay is used,
+    because the connection is what matters by then."""
+    fallback = None
+    arrival = _at_today(now, trip, "origin_arrival_time")
+    last_late = trip.get("origin_delay_minutes") or 0
+    if arrival is not None and now >= arrival + timedelta(minutes=last_late):
+        fallback = last_late
+    return get_connection_update(trip, DEFAULT_HOME_STATION, fallback_late=fallback), get_alerts()
+
+
 def run_follow_up_check():
-    """Runs every few minutes after the afternoon push until the train
-    leaves. Pushes again only if things got worse than the last push said."""
+    """Runs every few minutes after the afternoon push. Before the first
+    train leaves it re-checks the whole trip; on a transfer trip it then keeps
+    following the connection until that train leaves too. Pushes again only
+    if things got worse than the last push said."""
     now = _now()
     state = _follow_up
-    if state.get("date") != now.date() or now >= state["cutoff"]:
+    if state.get("date") != now.date():
+        return
+    riding = now >= state["cutoff"]
+    if riding and (state.get("trip") is None or now >= state["ride_cutoff"]):
         return
 
     try:
-        commute, alerts = _check_return_commute()
+        if riding:
+            commute, alerts = _check_connection(state["trip"], now)
+        else:
+            commute, alerts = _check_return_commute()
         if "error" in commute:
             raise RuntimeError(commute["error"])
     except Exception as e:
@@ -335,10 +394,17 @@ def run_follow_up_check():
         return
     state["failures"] = 0
 
-    if state["train"] is not None and commute.get("origin_train") != state["train"]:
-        # The rider's train has left (SEPTA now lists the next one).
+    if not riding and state["train"] is not None and commute.get("origin_train") != state["train"]:
+        # The rider's train has left (SEPTA now lists the next one). A
+        # transfer trip goes on to follow the connection right away.
         state["cutoff"] = now
+        if state.get("trip") is not None:
+            run_follow_up_check()
         return
+
+    if _is_transfer(commute):
+        state["trip"] = commute
+        state["ride_cutoff"] = _ride_cutoff(commute, now)
 
     title, message, priority, tags = build_afternoon_message(commute, alerts)
     severity = SEVERITY.get(title, 2)
@@ -359,7 +425,7 @@ def run_follow_up_check():
     state.update({
         "severity": max(severity, state["severity"]),
         "delay": delay,
-        "train": commute.get("origin_train"),
-        "cutoff": _follow_up_cutoff(commute, now),
         "paused_notice_sent": False,
     })
+    if not riding:
+        state.update({"train": commute.get("origin_train"), "cutoff": _follow_up_cutoff(commute, now)})

@@ -134,12 +134,18 @@ def _fetch_live_train_metadata(train_number: str) -> dict:
     else:
         _TRAIN_POSITIONS[train_number] = {"stop": current_stop, "lat": lat, "lon": lon, "first_seen_at": now}
 
+    try:
+        late_minutes = max(0, int(match.get("late")))
+    except (TypeError, ValueError):
+        late_minutes = None  # no usable delay; callers must not read this as on time
+
     return {
         "track": track,
         "current_stop": current_stop,
         "is_stalled": is_stalled,
         "stall_minutes": stall_minutes,
         "consist": match.get("consist"),
+        "late_minutes": late_minutes,
     }
 
 
@@ -275,6 +281,7 @@ def _build_transfer_trip(
     return {
         "trip_type": "transfer",
         **base,
+        "origin_arrival_time": chosen.get("orig_arrival_time"),  # first leg at the transfer station, scheduled
         "connection_station": chosen.get("Connection"),
         "connection_train": chosen.get("term_train"),
         "connection_line": chosen.get("term_line"),
@@ -529,6 +536,61 @@ def get_commute(
         # call that a missed connection; use SEPTA's own pick instead.
         return septa_fallback("No viable connections found", data_stale)
 
+    trip = _assemble_transfer_trip(
+        leg1, plan, leg2_results, transfer_station, walk_time,
+        backup_departure=_next_backup_departure(leg1_results, leg1),
+        data_stale=data_stale,
+    )
+    trip["itineraries"] = _transfer_itineraries(leg1_results, leg1, leg2_results)
+    return trip
+
+
+def get_connection_update(trip: dict, destination: str, fallback_late: int | None = None) -> dict:
+    """Re-plans the connection while the rider is on the first train.
+
+    NextToArrive stops listing a train once it leaves the rider's station, so
+    get_commute can't follow it any more. Instead this takes the first train's
+    live delay from TrainView and pairs it with the connecting trains now
+    listed at the transfer station. `trip` is an earlier get_commute result
+    for a transfer trip. Returns a trip dict like get_commute's, or
+    {"error": ...} when the live delay or the connecting trains aren't known
+    (never guessed as on time). `fallback_late` is used only when TrainView
+    has no delay for the train; the caller passes it once the train should
+    already have reached the transfer station."""
+    station = trip["connection_station"]
+    late = _fetch_live_train_metadata(trip.get("origin_train", "")).get("late_minutes")
+    if late is None:
+        late = fallback_late
+    if late is None:
+        return {"error": f"Train {trip.get('origin_train')} has no live position"}
+
+    leg2_results, data_stale = _fetch_trips(station, destination)
+    if not leg2_results:
+        return {"error": f"No connecting trains listed at {station}"}
+
+    leg1 = {
+        "orig_train": trip.get("origin_train"),
+        "orig_line": trip.get("origin_line"),
+        "orig_departure_time": trip["origin_departure_time"],
+        "orig_arrival_time": trip["origin_arrival_time"],
+        "orig_delay": f"{late} min" if late else "On time",
+    }
+    plan = _plan_connection(leg1, leg2_results)
+    if plan is None:
+        return {"error": f"No catchable connection listed at {station}"}
+
+    trip = _assemble_transfer_trip(leg1, plan, leg2_results, station, walk_time=0,
+                                   backup_departure=None, data_stale=data_stale)
+    trip["itineraries"] = []
+    return trip
+
+
+def _assemble_transfer_trip(
+    leg1: dict, plan: dict, leg2_results: list, transfer_station: str, walk_time: int,
+    backup_departure: str | None, data_stale: bool,
+) -> dict:
+    """Turns a first-leg train and its planned connection into the trip dict
+    the dashboard and the pushes read."""
     leg2_chosen = plan["leg2"]
     chosen = {
         "orig_train": leg1.get("orig_train"),
@@ -547,7 +609,7 @@ def get_commute(
 
     trip = _build_transfer_trip(
         chosen, walk_time, alternatives=leg2_results,
-        backup_departure=_next_backup_departure(leg1_results, leg1),
+        backup_departure=backup_departure,
         planned_arrival=plan["planned_arrival"],
     )
     trip["missed_connection"] = plan["missed_connection"]
@@ -556,7 +618,6 @@ def get_commute(
     if plan["planned_connection_cancelled"]:
         trip["delayed"] = True
     trip["data_stale"] = data_stale
-    trip["itineraries"] = _transfer_itineraries(leg1_results, leg1, leg2_results)
     return trip
 
 
