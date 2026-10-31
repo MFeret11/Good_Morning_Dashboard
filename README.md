@@ -9,7 +9,7 @@ Built to be polled by Home Assistant for a wall-mounted dashboard.
 
 [![The kitchen display and trip plan from the interactive demo](docs/demo.png)](https://mferet.com/commute.html)
 
-*From the [interactive demo](https://mferet.com/commute.html), which walks through a weekday: late trains, a missed connection and the afternoon pushes. Stations, trains and times in the demo are made up.*
+*From the [interactive demo](https://mferet.com/commute.html), which walks through a weekday: late trains, a missed connection and the afternoon pushes. The stations are real SEPTA ones but not the actual rider's, and the train numbers and times are made up.*
 
 ## What it does
 
