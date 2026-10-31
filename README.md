@@ -7,6 +7,10 @@ on weekday afternoons with the recommended train home.
 
 Built to be polled by Home Assistant for a wall-mounted dashboard.
 
+[![The kitchen display and trip plan from the interactive demo](docs/demo.png)](https://mferet.com/commute.html)
+
+*From the [interactive demo](https://mferet.com/commute.html), which walks through a weekday: late trains, a missed connection and the afternoon pushes. Stations, trains and times in the demo are made up.*
+
 ## What it does
 
 - **Trip planning with transfers.** Uses a direct trip when SEPTA has one.
