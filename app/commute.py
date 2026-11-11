@@ -23,6 +23,11 @@ _TRIP_RECENT: dict = {}  # (origin, destination) -> (trips, fetched_at), for ski
 _TRIP_CACHE = {}          # (origin, destination) -> (data, timestamp)
 _TRAIN_POSITIONS = {}     # train_no -> {"stop": str, "lat": float, "lon": float, "first_seen_at": float}
 _TRAINVIEW_CACHE = ([], 0.0) # (trains_list, timestamp)
+# Every train NextToArrive has listed today, by station pair. A train drops off
+# the list once it leaves the first station, so this is the only place its
+# schedule can still be found when the rider's GPS says they are on it.
+_SEEN_ROWS: dict = {}     # (origin, destination) -> {train_no: (row, seen_at)}
+SEEN_ROW_TTL_SECONDS = 6 * 3600
 
 CACHE_TTL_SECONDS = 300
 # Home Assistant polls every 30 s and the follow-ups share the same lookups, so
@@ -69,6 +74,12 @@ def _fetch_trips(origin: str, destination: str) -> tuple[list | None, bool]:
         return None, False
 
     _TRIP_RECENT[cache_key] = (data, now)  # any answer, empty included, for reuse within TRIP_FRESH_SECONDS
+    seen = _SEEN_ROWS.setdefault(cache_key, {})
+    for row in data:
+        if row.get("orig_train"):
+            seen[row["orig_train"]] = (row, now)
+    for train in [t for t, (_, ts) in seen.items() if now - ts > SEEN_ROW_TTL_SECONDS]:
+        del seen[train]
     for key in [k for k, (_, ts) in _TRIP_RECENT.items() if now - ts > TRIP_FRESH_SECONDS]:
         del _TRIP_RECENT[key]
     if data:
@@ -619,6 +630,61 @@ def get_connection_update(trip: dict, destination: str, fallback_late: int | Non
                                    backup_departure=None, data_stale=data_stale)
     trip["itineraries"] = []
     return trip
+
+
+def _seen_row(origin: str, destination: str, train: str) -> dict | None:
+    entry = _SEEN_ROWS.get((origin, destination), {}).get(train)
+    return entry[0] if entry else None
+
+
+def get_trip_for_boarded_train(
+    train: str, origin: str, destination: str, preferred_transfer: str | None = None,
+) -> dict | None:
+    """The trip as it stands for a rider whose GPS puts them on `train`.
+
+    Works for a first-leg train (re-pairs it with the connections now listed),
+    a connecting train (only the ride to the destination is left) and a direct
+    train, using the schedule remembered from when NextToArrive last listed the
+    train and TrainView's live delay. Returns None when the train was never
+    listed for this commute or has no live delay (never guessed as on time)."""
+    late = _fetch_live_train_metadata(train).get("late_minutes")
+    if late is None:
+        return None
+    delay_text = f"{late} min" if late else "On time"
+    preferred = preferred_transfer or DEFAULT_TRANSFER_STATION
+    stations = [preferred, *[s for s in TRANSFER_FALLBACK_STATIONS if s != preferred]]
+
+    def ride_only(row: dict) -> dict:
+        trip = _build_direct_trip({**row, "orig_delay": delay_text}, 0, alternatives=[], backup_departure=None)
+        trip["itineraries"] = []
+        trip["data_stale"] = False
+        return trip
+
+    direct = _seen_row(origin, destination, train)
+    if direct and direct.get("isdirect") == "true":
+        return ride_only(direct)
+
+    for station in stations:
+        row = _seen_row(origin, station, train)
+        if row:
+            trip = get_connection_update({
+                "connection_station": station,
+                "origin_train": train,
+                "origin_line": row.get("orig_line"),
+                "origin_departure_time": row["orig_departure_time"],
+                "origin_arrival_time": row["orig_arrival_time"],
+            }, destination)
+            if "error" in trip:
+                return None
+            trip["preferred_transfer_station"] = preferred
+            trip["transfer_fallback"] = station != preferred
+            return trip
+
+    for station in stations:
+        row = _seen_row(station, destination, train)
+        if row:
+            return ride_only(row)
+    return None
 
 
 def _assemble_transfer_trip(

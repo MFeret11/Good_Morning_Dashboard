@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
 from fastapi import FastAPI, Query
+from pydantic import BaseModel
 
 from app.config import (
     DEFAULT_HOME_STATION, DEFAULT_WORK_STATION, DEFAULT_TRANSFER_STATION,
@@ -10,7 +11,8 @@ from app.config import (
     ACTIVE_POLL_INTERVAL_MS, IDLE_POLL_INTERVAL_MS,
     AFTERNOON_TARGET_DEPARTURE_TIME,
 )
-from app.commute import get_commute
+from app import rider
+from app.commute import get_commute, get_trip_for_boarded_train
 from app.alerts import get_alerts, alert_summary, no_alerts
 from app.weather import get_weather
 from app.scheduler import start_scheduler
@@ -106,6 +108,26 @@ def test_notification():
     return {"status": "triggered"}
 
 
+class RiderFix(BaseModel):
+    latitude: float
+    longitude: float
+    accuracy: Optional[float] = None
+    last_seen: Optional[datetime] = None   # when the phone reported this position
+    zone: Optional[str] = None             # Home Assistant state: 'home', 'not_home' or a zone name
+
+
+@app.post("/api/location")
+def post_location(fix: RiderFix):
+    """Home Assistant posts the rider's GPS fix here. It is kept in memory
+    only, to work out which train the rider is on; nothing echoes it back."""
+    rider.update_fix(
+        fix.latitude, fix.longitude, fix.accuracy,
+        seen_at=fix.last_seen.timestamp() if fix.last_seen else None,
+        zone=fix.zone,
+    )
+    return {"status": "ok"}
+
+
 @app.get("/api/dashboard")
 def get_dashboard(
     origin: Optional[str] = None,
@@ -128,6 +150,17 @@ def get_dashboard(
         )
     else:
         commute = {"error": "Outside active commute windows"}
+
+    # With a GPS fix, the afternoon card follows the train the rider is really
+    # on, which is often not the one nearest the target time.
+    who = rider.current() if not (origin and destination) else None
+    on_train = who["on_train"] if who else None
+    if on_train and window == "afternoon" and "error" not in commute \
+            and on_train != commute.get("origin_train"):
+        boarded = get_trip_for_boarded_train(
+            on_train, DEFAULT_WORK_STATION, DEFAULT_HOME_STATION, DEFAULT_TRANSFER_STATION)
+        if boarded:
+            commute = boarded
 
     # Outside commute hours nothing shows the alerts, so don't ask SEPTA for
     # them every time Home Assistant polls.
@@ -159,6 +192,9 @@ def get_dashboard(
     # cards must show ride along here, already reduced to plain text.
     commute_display["service_alerts"] = [alert_summary(a) for a in alerts.get("critical_alerts", [])]
     commute_display["alerts_unavailable"] = bool(alerts.get("alerts_unavailable"))
+    commute_display["rider_on_train"] = on_train
+    commute_display["rider_home"] = bool(who and who["home"])
+    commute_display["rider_location_age_minutes"] = who["age_minutes"] if who and who["fresh"] else None
     weather_display = {k: v for k, v in weather.items() if k != "hourly_detail"}
 
     return {

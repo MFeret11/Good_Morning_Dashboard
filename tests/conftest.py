@@ -23,6 +23,7 @@ import pytest  # noqa: E402
 import app.afternoon_check  # noqa: E402
 import app.alerts  # noqa: E402
 import app.commute  # noqa: E402
+import app.rider  # noqa: E402
 import app.weather  # noqa: E402
 
 
@@ -35,6 +36,8 @@ def reset_module_caches():
     app.commute._TRIP_RECENT.clear()
     app.commute._TRAIN_POSITIONS.clear()
     app.commute._TRAINVIEW_CACHE = ([], 0.0)
+    app.commute._SEEN_ROWS.clear()
+    app.rider.reset()
     app.weather._WEATHER_CACHE.clear()
     app.afternoon_check._follow_up.clear()
     yield
