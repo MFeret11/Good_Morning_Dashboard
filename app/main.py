@@ -9,14 +9,14 @@ from app.config import (
     DEFAULT_HOME_STATION, DEFAULT_WORK_STATION, DEFAULT_TRANSFER_STATION,
     DASHBOARD_MORNING_START, DASHBOARD_MORNING_END, DASHBOARD_AFTERNOON_START, DASHBOARD_AFTERNOON_END,
     ACTIVE_POLL_INTERVAL_MS, IDLE_POLL_INTERVAL_MS,
-    AFTERNOON_TARGET_DEPARTURE_TIME,
+    AFTERNOON_TARGET_DEPARTURE_TIME, HEADING_HOME_START, HEADING_HOME_END,
 )
 from app import rider
 from app.commute import get_commute, get_trip_for_boarded_train, untracked_listed_trains
 from app.alerts import get_alerts, alert_summary, no_alerts
 from app.weather import get_weather
-from app.scheduler import start_scheduler
-from app.afternoon_check import run_afternoon_check
+from app.scheduler import start_scheduler, run_soon
+from app.afternoon_check import run_afternoon_check, run_departure_check
 
 
 # --- LIFESPAN CONTEXT MANAGER (FastAPI Startup / Shutdown) ---
@@ -35,8 +35,10 @@ app = FastAPI(
 )
 
 
-def get_active_window() -> str | None:
-    """Determines active commute window based on day and 24h clock."""
+def get_active_window(heading_home: bool = False) -> str | None:
+    """Determines active commute window based on day and 24h clock. Once the
+    rider has left work (`heading_home`, from Home Assistant) the trip home is
+    looked up whatever the hour, from late morning to late evening."""
     now = datetime.now()
     if now.weekday() >= 5:  # Saturday=5, Sunday=6
         return None
@@ -44,6 +46,8 @@ def get_active_window() -> str | None:
     if DASHBOARD_MORNING_START <= hour < DASHBOARD_MORNING_END:
         return "morning"
     elif DASHBOARD_AFTERNOON_START <= hour < DASHBOARD_AFTERNOON_END:
+        return "afternoon"
+    elif heading_home and HEADING_HOME_START <= hour < HEADING_HOME_END:
         return "afternoon"
     return None
 
@@ -114,17 +118,23 @@ class RiderFix(BaseModel):
     accuracy: Optional[float] = None
     last_seen: Optional[datetime] = None   # when the phone reported this position
     zone: Optional[str] = None             # Home Assistant state: 'home', 'not_home' or a zone name
+    heading_home: Optional[bool] = None    # Home Assistant: left work, not home yet
 
 
 @app.post("/api/location")
 def post_location(fix: RiderFix):
     """Home Assistant posts the rider's GPS fix here. It is kept in memory
-    only, to work out which train the rider is on; nothing echoes it back."""
+    only, to work out which train the rider is on; nothing echoes it back.
+    The first post saying the rider has left work sends the "Left work" push."""
+    was_heading_home = bool((rider.current() or {}).get("heading_home"))
     rider.update_fix(
         fix.latitude, fix.longitude, fix.accuracy,
         seen_at=fix.last_seen.timestamp() if fix.last_seen else None,
         zone=fix.zone,
+        heading_home=fix.heading_home,
     )
+    if not was_heading_home and (rider.current() or {}).get("heading_home"):
+        run_soon(run_departure_check)
     return {"status": "ok"}
 
 
@@ -135,8 +145,9 @@ def get_dashboard(
     target_time: Optional[str] = None,
 ):
     """Master telemetry aggregator for Home Assistant polling."""
-    window = get_active_window()
     who = rider.current() if not (origin and destination) else None
+    heading_home = bool(who and who["heading_home"])
+    window = get_active_window(heading_home)
     # Home Assistant says the rider is away: most likely on the train that
     # just left, so the morning trip stays with it rather than the next one.
     away = bool(who and who["away"])
@@ -146,10 +157,12 @@ def get_dashboard(
     elif window == "morning":
         commute = get_commute(DEFAULT_HOME_STATION, DEFAULT_WORK_STATION, keep_departed=away)
     elif window == "afternoon":
+        # Once the rider has left work, the train to show is the first one they
+        # can still make on foot, not the one nearest the usual time.
         commute = get_commute(
             DEFAULT_WORK_STATION,
             DEFAULT_HOME_STATION,
-            target_time=AFTERNOON_TARGET_DEPARTURE_TIME,
+            target_time=None if heading_home else AFTERNOON_TARGET_DEPARTURE_TIME,
             preferred_transfer=DEFAULT_TRANSFER_STATION,
         )
     else:
@@ -213,6 +226,7 @@ def get_dashboard(
     commute_display["alerts_unavailable"] = bool(alerts.get("alerts_unavailable"))
     commute_display["rider_on_train"] = on_train
     commute_display["rider_home"] = bool(who and who["home"])
+    commute_display["rider_heading_home"] = heading_home
     commute_display["rider_location_age_minutes"] = who["age_minutes"] if who and who["fresh"] else None
     weather_display = {k: v for k, v in weather.items() if k != "hourly_detail"}
 

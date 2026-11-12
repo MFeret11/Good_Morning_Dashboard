@@ -12,6 +12,7 @@ os.environ.update({
     "WALK_TIMES": "Glenside:5,Ambler:15,Jefferson Station:3",
     "AFTERNOON_TARGET_DEPARTURE": "5:00PM",
     "NOTIFY_TIME": "4:00PM",
+    "DEPARTURE_PUSH_FROM": "2:00PM",
     "RELEVANT_LINES": "Lansdale/Doylestown,Paoli/Thorndale",
     "WEATHER_LAT": "39.9526",
     "WEATHER_LON": "-75.1652",

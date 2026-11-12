@@ -22,11 +22,15 @@ OPPOSITE_DEGREES = 90         # a train heading this far off the rider's own cou
 RIDING_SPEED_MPS = 7          # faster than anyone runs
 PAUSED_SPEED_MPS = 2          # slower than this is a station stop, or walking
 
-_state: dict = {"fix": None, "votes": [], "train": None, "untracked": False}
+# Home Assistant's "left work, not home yet" flag holds for at most this long
+# without a new fix saying so, so a stuck flag can't keep the service busy.
+HEADING_HOME_MAX_AGE_SECONDS = 1800
+
+_state: dict = {"fix": None, "votes": [], "train": None, "untracked": False, "heading_home": None}
 
 
 def reset() -> None:
-    _state.update({"fix": None, "votes": [], "train": None, "untracked": False})
+    _state.update({"fix": None, "votes": [], "train": None, "untracked": False, "heading_home": None})
 
 
 def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -68,11 +72,16 @@ def _nearest_train(fix: dict, course: float | None = None) -> str | None:
 
 
 def update_fix(lat: float, lon: float, accuracy: float | None = None,
-               seen_at: float | None = None, zone: str | None = None) -> None:
+               seen_at: float | None = None, zone: str | None = None,
+               heading_home: bool | None = None) -> None:
     """Stores a new fix and re-evaluates which train the rider is on.
     `seen_at` is when the phone reported it (epoch seconds); `zone` is Home
-    Assistant's name for where the rider is ('home', 'not_home', a zone)."""
+    Assistant's name for where the rider is ('home', 'not_home', a zone);
+    `heading_home` is Home Assistant's "left work and not home yet" (None:
+    not sent, so unknown)."""
     now = time.time()
+    if heading_home is not None:
+        _state["heading_home"] = now if heading_home else None
     fix = {"lat": lat, "lon": lon, "accuracy": accuracy, "seen_at": seen_at or now, "zone": zone}
     previous = _state["fix"]
     _state["fix"] = fix
@@ -130,5 +139,8 @@ def current() -> dict | None:
         # a phone with no signal (a tunnel) is still away.
         "away": fix["zone"] not in (None, "home", "unknown", "unavailable"),
         "on_train": _state["train"] if fresh else None,
+        # Left work and not home yet, as last posted, while that post is recent.
+        "heading_home": bool(_state["heading_home"]) and fix["zone"] != "home"
+        and time.time() - _state["heading_home"] <= HEADING_HOME_MAX_AGE_SECONDS,
         "riding_untracked": fresh and _state["untracked"] and not _state["train"],
     }

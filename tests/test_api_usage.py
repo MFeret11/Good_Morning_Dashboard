@@ -47,7 +47,7 @@ def test_recent_answers_are_reused(monkeypatch):
 
 
 def test_no_septa_calls_outside_commute_hours(monkeypatch):
-    monkeypatch.setattr(app.main, "get_active_window", lambda: None)
+    monkeypatch.setattr(app.main, "get_active_window", lambda *_: None)
     monkeypatch.setattr(app.main, "get_weather", lambda: {})
     with patch("app.commute.requests.get") as trips, patch("app.alerts.requests.get") as alerts:
         result = app.main.get_dashboard()
@@ -56,13 +56,23 @@ def test_no_septa_calls_outside_commute_hours(monkeypatch):
     assert result["commute"]["service_alerts"] == []
 
 
-def window_at(monkeypatch, weekday_hour):
+def window_at(monkeypatch, weekday_hour, heading_home=False, day=5):
     class Fixed(datetime):
         @classmethod
         def now(cls, tz=None):
-            return datetime(2026, 1, 5, *weekday_hour)  # a Monday
+            return datetime(2026, 1, day, *weekday_hour)  # the 5th is a Monday
     monkeypatch.setattr(app.main, "datetime", Fixed)
-    return app.main.get_active_window()
+    return app.main.get_active_window(heading_home)
+
+
+def test_a_rider_on_the_way_home_gets_trains_outside_the_afternoon_window(monkeypatch):
+    assert window_at(monkeypatch, (19, 30)) is None
+    assert window_at(monkeypatch, (19, 30), heading_home=True) == "afternoon"
+    assert window_at(monkeypatch, (11, 0), heading_home=True) == "afternoon"
+    assert window_at(monkeypatch, (10, 59), heading_home=True) is None
+    assert window_at(monkeypatch, (23, 0), heading_home=True) is None
+    assert window_at(monkeypatch, (7, 0), heading_home=True) == "morning"
+    assert window_at(monkeypatch, (15, 0), heading_home=True, day=10) is None  # a Saturday
 
 
 def test_dashboard_looks_up_trains_only_around_the_commute(monkeypatch):

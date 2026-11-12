@@ -88,6 +88,13 @@ AFTERNOON_START, AFTERNOON_END = 14, 19
 # 6-8 AM and 4-6 PM; outside these hours the dashboard calls SEPTA not at all.
 DASHBOARD_MORNING_START, DASHBOARD_MORNING_END = 6, 8
 DASHBOARD_AFTERNOON_START, DASHBOARD_AFTERNOON_END = 14, 18
+# Once Home Assistant says the rider has left work, the trip home is looked up
+# at any hour in this range, not only in the afternoon window above.
+HEADING_HOME_START, HEADING_HOME_END = 11, 23
+# The "Left work" push goes out only from this time on, so a walk at lunch
+# doesn't send one.
+_departure_from = datetime.strptime(_env_clock_time("DEPARTURE_PUSH_FROM", "2:00PM"), "%I:%M%p")
+DEPARTURE_PUSH_FROM = _departure_from.time()
 
 # --- Polling Cadence ---
 ACTIVE_POLL_INTERVAL_MS = 60_000      # 1 min during commute

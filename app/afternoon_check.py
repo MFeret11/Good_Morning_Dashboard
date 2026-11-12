@@ -9,8 +9,10 @@ from app.weather import get_weather
 from app.config import (
     DEFAULT_WORK_STATION, DEFAULT_HOME_STATION, DEFAULT_TRANSFER_STATION,
     AFTERNOON_TARGET_DEPARTURE_TIME, SIGNIFICANT_DELAY_MINUTES, AFTERNOON_END,
+    HEADING_HOME_END, DEPARTURE_PUSH_FROM,
 )
 from app.notifications import send_notification
+from app import rider
 from app.time_utils import parse_time, anchor_to_today
 
 log = logging.getLogger(__name__)
@@ -53,7 +55,13 @@ FOLLOW_UP_DELAY_STEP_MINUTES = 10
 FOLLOW_UP_FAILURES_BEFORE_NOTICE = 2
 
 # What the last push said, so follow-ups know what the rider already knows.
+# `heading_home` is the date the rider left work (from Home Assistant's GPS),
+# once the "Left work" push went out; from then on that day the trip is the
+# next train they can make, not the one nearest the target time.
 _follow_up = {}
+# A second "left work" this soon after the last (the flag dropping out for a
+# moment) is the same departure.
+DEPARTURE_REPEAT_MINUTES = 20
 
 
 def _now() -> datetime:
@@ -61,11 +69,23 @@ def _now() -> datetime:
     return datetime.now()
 
 
+def _rider_is_home() -> bool:
+    """A recent GPS fix from Home Assistant says the rider is home already, so
+    there's no trip to push about. Without a fresh fix this is False and the
+    pushes go out as usual (a missing push reads as "all good")."""
+    who = rider.current()
+    return bool(who and who["home"])
+
+
+def _heading_home_today(now: datetime) -> bool:
+    return _follow_up.get("heading_home") == now.date()
+
+
 def _check_return_commute() -> tuple[dict, dict]:
     commute = get_commute(
         DEFAULT_WORK_STATION,
         DEFAULT_HOME_STATION,
-        target_time=AFTERNOON_TARGET_DEPARTURE_TIME,
+        target_time=None if _heading_home_today(_now()) else AFTERNOON_TARGET_DEPARTURE_TIME,
         preferred_transfer=DEFAULT_TRANSFER_STATION,
     )
     return commute, get_alerts()
@@ -311,7 +331,10 @@ def _send(title: str, message: str, priority: str, tags: list[str]) -> None:
 
 
 def _window_end(now: datetime) -> datetime:
-    return now.replace(hour=AFTERNOON_END, minute=0, second=0, microsecond=0)
+    """Follow-ups stop by the end of the afternoon window, or later in the
+    evening once the rider has left work (they may leave late)."""
+    hour = max(AFTERNOON_END, HEADING_HOME_END) if _heading_home_today(now) else AFTERNOON_END
+    return now.replace(hour=hour, minute=0, second=0, microsecond=0)
 
 
 def _at_today(now: datetime, commute: dict, key: str) -> datetime | None:
@@ -363,6 +386,14 @@ def run_afternoon_check():
     """The scheduled afternoon push. Never let a crash end in silence: no push
     reads as 'all good'."""
     now = _now()
+    if _heading_home_today(now):
+        # Already on the way: the "Left work" push named the train they can
+        # make, and the target-time train would be the wrong one.
+        print("[afternoon_check] Rider already left work; scheduled push skipped")
+        return
+    if _rider_is_home():
+        print("[afternoon_check] Rider is home already; scheduled push skipped")
+        return
     commute = None
     try:
         commute, alerts = _check_return_commute()
@@ -376,6 +407,33 @@ def run_afternoon_check():
         title, message, priority, tags = CHECK_FAILED_MESSAGE
 
     _send(title, message, priority, tags)
+    _remember(title, commute, now)
+
+
+def run_departure_check():
+    """Home Assistant says the rider just left work: push the next train they
+    can make (what the dashboard shows), and let the follow-ups track it.
+    Weekdays only, from DEPARTURE_PUSH_FROM on."""
+    now = _now()
+    if now.weekday() >= 5 or now.time() < DEPARTURE_PUSH_FROM:
+        return
+    last = _follow_up.get("departure_at")
+    if last and now - last < timedelta(minutes=DEPARTURE_REPEAT_MINUTES):
+        return
+    _follow_up.update({"heading_home": now.date(), "departure_at": now})
+    commute = None
+    try:
+        commute, alerts = _check_return_commute()
+        title, message, priority, tags = build_afternoon_message(commute, alerts)
+        if "error" not in commute:
+            note = _weather_note()
+            if note:
+                message = f"{message}\n\n{note}"
+    except Exception:
+        log.exception("Departure commute check crashed")
+        title, message, priority, tags = CHECK_FAILED_MESSAGE
+
+    _send(f"Left work: {title}", message, priority, tags)
     _remember(title, commute, now)
 
 
@@ -399,7 +457,7 @@ def run_follow_up_check():
     if things got worse than the last push said."""
     now = _now()
     state = _follow_up
-    if state.get("date") != now.date():
+    if state.get("date") != now.date() or _rider_is_home():
         return
     riding = now >= state["cutoff"]
     if riding and (state.get("trip") is None or now >= state["ride_cutoff"]):

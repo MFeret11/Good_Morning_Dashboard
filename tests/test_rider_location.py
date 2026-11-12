@@ -202,7 +202,7 @@ def test_no_trip_for_a_train_never_listed_or_without_a_live_delay():
 # --- the API --------------------------------------------------------------------
 
 def _dashboard(monkeypatch, responses, trainview):
-    monkeypatch.setattr(app.main, "get_active_window", lambda: "afternoon")
+    monkeypatch.setattr(app.main, "get_active_window", lambda *_: "afternoon")
     monkeypatch.setattr(app.main, "AFTERNOON_TARGET_DEPARTURE_TIME", "5:15PM")
     monkeypatch.setattr(app.main, "get_alerts", lambda: {"has_critical_alerts": False, "critical_alerts": []})
     monkeypatch.setattr(app.main, "get_weather", lambda: {})
@@ -227,6 +227,30 @@ def test_dashboard_without_a_fix_is_unchanged(monkeypatch):
     assert commute["rider_location_age_minutes"] is None
 
 
+def test_heading_home_holds_until_cleared_home_or_old():
+    rider.update_fix(40.1, -75.2, zone="not_home", heading_home=True)
+    assert rider.current()["heading_home"] is True
+    rider.update_fix(40.11, -75.2, zone="not_home")             # flag not sent: unchanged
+    assert rider.current()["heading_home"] is True
+    rider.update_fix(40.12, -75.2, zone="At work", heading_home=False)
+    assert rider.current()["heading_home"] is False
+    rider.update_fix(40.13, -75.2, zone="not_home", heading_home=True)
+    rider._state["heading_home"] -= rider.HEADING_HOME_MAX_AGE_SECONDS + 1
+    assert rider.current()["heading_home"] is False             # stale: Home Assistant went quiet
+    rider.update_fix(40.14, -75.2, zone="home", heading_home=True)
+    assert rider.current()["heading_home"] is False             # home is home
+
+
+def test_on_the_way_home_the_card_shows_the_next_train_they_can_make(monkeypatch):
+    # The target time (5:15PM) would pick 9254; having left work, the first
+    # train still reachable on foot is the one to show.
+    assert _dashboard(monkeypatch, PLAN, [])["commute"]["origin_train"] == "9254"
+    rider.update_fix(40.1, -75.2, accuracy=10, zone="not_home", heading_home=True)
+    commute = _dashboard(monkeypatch, PLAN, [])["commute"]
+    assert commute["origin_train"] == "9250"
+    assert commute["rider_heading_home"] is True
+
+
 def test_dashboard_follows_the_train_the_rider_is_on(monkeypatch):
     _dashboard(monkeypatch, PLAN, [])            # the afternoon's trains get listed
     feed(tv("9250", 40.100, -75.200, late=4))
@@ -248,7 +272,7 @@ MORNING = {("Ambler", "Glenside"): [
 
 
 def _morning(monkeypatch, trainview):
-    monkeypatch.setattr(app.main, "get_active_window", lambda: "morning")
+    monkeypatch.setattr(app.main, "get_active_window", lambda *_: "morning")
     monkeypatch.setattr(app.main, "DEFAULT_HOME_STATION", "Ambler")
     monkeypatch.setattr(app.main, "DEFAULT_WORK_STATION", "Glenside")
     monkeypatch.setattr(app.main, "get_alerts", lambda: {"has_critical_alerts": False, "critical_alerts": []})
@@ -318,7 +342,7 @@ LAST_DIRECT = {
 
 def _late_morning(monkeypatch):
     monkeypatch.setattr(app.commute, "_now", lambda: datetime(2026, 1, 5, 7, 50))
-    monkeypatch.setattr(app.main, "get_active_window", lambda: "morning")
+    monkeypatch.setattr(app.main, "get_active_window", lambda *_: "morning")
     monkeypatch.setattr(app.main, "DEFAULT_HOME_STATION", "Ambler")
     monkeypatch.setattr(app.main, "DEFAULT_WORK_STATION", "Glenside")
     monkeypatch.setattr(app.main, "get_alerts", lambda: {"has_critical_alerts": False, "critical_alerts": []})
@@ -354,3 +378,15 @@ def test_a_departed_direct_train_stays_when_nothing_later_is_listed(monkeypatch)
 def test_rider_away_with_an_old_position_still_stays_with_that_train(monkeypatch):
     fix(40.1, -75.2, minutes_ago=30)     # in a tunnel: no new position for a while
     assert _late_morning(monkeypatch)["origin_train"] == "9260"
+
+
+def test_the_first_post_after_leaving_work_sends_the_departure_push(monkeypatch):
+    started = []
+    monkeypatch.setattr(app.main, "run_soon", started.append)
+    post = lambda **kw: app.main.post_location(app.main.RiderFix.model_validate(
+        {"latitude": 40.1, "longitude": -75.2, "zone": "not_home", **kw}))
+    post(zone="At work", heading_home=False)
+    post(heading_home=True)
+    post(heading_home=True)         # still on the way: no second push
+    post()                          # flag not sent: unchanged
+    assert started == [app.main.run_departure_check]

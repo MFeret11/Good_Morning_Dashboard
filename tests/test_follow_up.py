@@ -298,3 +298,79 @@ def test_late_first_train_that_still_connects_does_not_buzz(day):
     day.at("16:40", (commute(origin_delay_minutes=4, origin_actual_departure_time="5:19PM"), NO_ALERTS))
     ac.run_follow_up_check()
     assert day.titles() == ["Commute looks good"]
+
+
+# --- the "Left work" push (Home Assistant says the rider has left work) -------
+
+def test_leaving_work_pushes_the_next_train_and_skips_the_scheduled_push(day):
+    day.at("15:40")
+    ac.run_departure_check()
+    day.at("16:00")
+    ac.run_afternoon_check()        # the target-time train would be the wrong one now
+    assert day.titles() == ["Left work: Commute looks good"]
+
+
+def test_leaving_work_after_the_scheduled_push_still_pushes(day):
+    ac.run_afternoon_check()
+    day.at("16:50")
+    ac.run_departure_check()
+    assert day.titles() == ["Commute looks good", "Left work: Commute looks good"]
+
+
+def test_no_departure_push_before_the_afternoon_or_on_weekends(day):
+    day.at("12:30")                 # out for lunch
+    ac.run_departure_check()
+    day.now = day.now.replace(day=10, hour=16)  # a Saturday
+    ac.run_departure_check()
+    assert day.sent == []
+
+
+def test_a_repeat_departure_soon_after_is_the_same_one(day):
+    day.at("16:40")
+    ac.run_departure_check()
+    day.at("16:50")
+    ac.run_departure_check()
+    day.at("17:05")
+    ac.run_departure_check()        # back at work and out again: a new departure
+    assert day.titles() == ["Left work: Commute looks good"] * 2
+
+
+def test_follow_ups_run_into_the_evening_after_a_late_departure(day):
+    late = dict(origin_actual_departure_time="7:50PM", origin_departure_time="7:50PM",
+                origin_arrival_time="8:10PM", connection_actual_departure_time="8:20PM")
+    day.at("19:30", (commute(**late), NO_ALERTS))
+    ac.run_departure_check()
+    day.at("19:35", (commute(**late, is_cancelled=True, backup_train_departure="8:20PM"), NO_ALERTS))
+    ac.run_follow_up_check()
+    assert day.titles() == ["Left work: Commute looks good", "Update: TRAIN CANCELLED"]
+
+
+def test_after_leaving_work_the_trip_is_the_next_reachable_train(monkeypatch):
+    asked = []
+    monkeypatch.setattr(ac, "_now", lambda: datetime(2026, 1, 5, 16, 0))
+    monkeypatch.setattr(ac, "get_alerts", lambda: NO_ALERTS)
+    monkeypatch.setattr(ac, "get_commute", lambda *a, **kw: asked.append(kw["target_time"]) or commute())
+    ac._check_return_commute()
+    ac._follow_up["heading_home"] = datetime(2026, 1, 5).date()
+    ac._check_return_commute()
+    assert asked == [ac.AFTERNOON_TARGET_DEPARTURE_TIME, None]
+
+
+def test_no_pushes_once_the_rider_is_home(day, monkeypatch):
+    # 2026-11-12: a service-alert push went out at the scheduled time though
+    # the rider had been home for half an hour.
+    home = {"home": False}
+    monkeypatch.setattr(ac.rider, "current", lambda: {"home": home["home"]})
+    ac.run_afternoon_check()
+    home["home"] = True
+    day.at("16:50", (commute(is_cancelled=True), NO_ALERTS))
+    ac.run_follow_up_check()
+    day.now = day.now.replace(day=6, hour=16, minute=30)  # the next day, already home
+    ac.run_afternoon_check()
+    assert day.titles() == ["Commute looks good"]
+
+
+def test_without_a_fresh_fix_the_push_still_goes_out(day, monkeypatch):
+    monkeypatch.setattr(ac.rider, "current", lambda: None)  # no GPS posted
+    ac.run_afternoon_check()
+    assert day.titles() == ["Commute looks good"]
