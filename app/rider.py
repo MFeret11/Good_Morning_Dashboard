@@ -126,6 +126,9 @@ def current() -> dict | None:
         "fresh": fresh,
         "age_minutes": round(age / 60),
         "home": fresh and fix["zone"] == "home",
+        # Home Assistant's home / away state, which holds until the next fix:
+        # a phone with no signal (a tunnel) is still away.
+        "away": fix["zone"] not in (None, "home", "unknown", "unavailable"),
         "on_train": _state["train"] if fresh else None,
         "riding_untracked": fresh and _state["untracked"] and not _state["train"],
     }

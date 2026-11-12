@@ -136,11 +136,15 @@ def get_dashboard(
 ):
     """Master telemetry aggregator for Home Assistant polling."""
     window = get_active_window()
+    who = rider.current() if not (origin and destination) else None
+    # Home Assistant says the rider is away: most likely on the train that
+    # just left, so the morning trip stays with it rather than the next one.
+    away = bool(who and who["away"])
 
     if origin and destination:
         commute = get_commute(origin, destination, target_time=target_time)
     elif window == "morning":
-        commute = get_commute(DEFAULT_HOME_STATION, DEFAULT_WORK_STATION)
+        commute = get_commute(DEFAULT_HOME_STATION, DEFAULT_WORK_STATION, keep_departed=away)
     elif window == "afternoon":
         commute = get_commute(
             DEFAULT_WORK_STATION,
@@ -153,7 +157,6 @@ def get_dashboard(
 
     # With a GPS fix, the afternoon card follows the train the rider is really
     # on, which is often not the one nearest the target time.
-    who = rider.current() if not (origin and destination) else None
     on_train = who["on_train"] if who else None
     # Moving at train speed with no located train alongside: if exactly one of
     # today's listed trains has no GPS position in TrainView, that is the one.

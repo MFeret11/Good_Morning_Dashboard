@@ -299,3 +299,58 @@ def test_dashboard_reports_the_rider_home(monkeypatch):
     commute = _dashboard(monkeypatch, PLAN, [])["commute"]
     assert commute["rider_home"] is True
     assert commute["rider_on_train"] is None
+
+
+# --- the last direct train of the morning has left ---------------------------------
+
+# SEPTA keeps listing a train until it reaches the destination, so at 7:50 the
+# 7:15 direct train is still on the list, ahead of a later trip with a change.
+LAST_DIRECT = {
+    ("Ambler", "Glenside"): [
+        {**leg("9260", "7:15AM", "8:10AM"), "isdirect": "true"},
+        {**leg("9270", "8:30AM", "9:05AM"), "term_train": "3300", "term_depart_time": "9:15AM",
+         "term_arrival_time": "9:40AM", "term_delay": "On time", "Connection": "Jefferson Station"},
+    ],
+    ("Ambler", "Jefferson Station"): [leg("9270", "8:30AM", "9:05AM")],
+    ("Jefferson Station", "Glenside"): [leg("3300", "9:15AM", "9:40AM")],
+}
+
+
+def _late_morning(monkeypatch):
+    monkeypatch.setattr(app.commute, "_now", lambda: datetime(2026, 1, 5, 7, 50))
+    monkeypatch.setattr(app.main, "get_active_window", lambda: "morning")
+    monkeypatch.setattr(app.main, "DEFAULT_HOME_STATION", "Ambler")
+    monkeypatch.setattr(app.main, "DEFAULT_WORK_STATION", "Glenside")
+    monkeypatch.setattr(app.main, "get_alerts", lambda: {"has_critical_alerts": False, "critical_alerts": []})
+    monkeypatch.setattr(app.main, "get_weather", lambda: {})
+    with patch("app.commute.requests.get", side_effect=septa(LAST_DIRECT)):
+        return app.main.get_dashboard()["commute"]
+
+
+def test_a_departed_last_direct_train_gives_way_to_the_next_trip(monkeypatch):
+    commute = _late_morning(monkeypatch)
+    assert commute["origin_train"] == "9270"
+    assert commute["already_departed"] is False
+
+
+def test_rider_at_home_is_shown_the_next_trip_too(monkeypatch):
+    fix(40.0, -75.0, zone="home")
+    assert _late_morning(monkeypatch)["origin_train"] == "9270"
+
+
+def test_rider_already_out_stays_with_the_train_that_left(monkeypatch):
+    fix(40.1, -75.2)
+    commute = _late_morning(monkeypatch)
+    assert commute["origin_train"] == "9260"
+    assert commute["already_departed"] is True
+    assert commute["actual_arrival_time"] == "8:10AM"
+
+
+def test_a_departed_direct_train_stays_when_nothing_later_is_listed(monkeypatch):
+    monkeypatch.setitem(LAST_DIRECT, ("Ambler", "Glenside"), LAST_DIRECT[("Ambler", "Glenside")][:1])
+    assert _late_morning(monkeypatch)["origin_train"] == "9260"
+
+
+def test_rider_away_with_an_old_position_still_stays_with_that_train(monkeypatch):
+    fix(40.1, -75.2, minutes_ago=30)     # in a tunnel: no new position for a while
+    assert _late_morning(monkeypatch)["origin_train"] == "9260"

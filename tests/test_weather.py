@@ -38,6 +38,14 @@ def test_snow_shower_is_not_reported_as_rain_gear():
     assert any("snow showers" in x.lower() for x in w["commute_warnings"])
 
 
+def test_snow_reported_on_a_mild_day_is_read_as_rain():
+    # Open-Meteo once called a 54-degree afternoon shower "moderate snow".
+    w = weather_for({15: 73, 17: 86}, temp=54)
+    assert "umbrella" in w["attire_suggestion"].lower()
+    assert "snow" not in " ".join(w["commute_warnings"]).lower()
+    assert any("rain" in x.lower() for x in w["commute_warnings"])
+
+
 def test_rain_still_suggests_umbrella():
     w = weather_for({7: 63}, temp=55)
     assert "umbrella" in w["attire_suggestion"].lower()

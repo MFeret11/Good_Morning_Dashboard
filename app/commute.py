@@ -514,17 +514,22 @@ def _pick_closest_to_target(results: list, target_time_str: str) -> dict:
     return min(results, key=lambda r: abs((parse_time(r["orig_departure_time"]) - target).total_seconds()))
 
 
-def _first_reachable(results: list, walk_time: int) -> dict:
-    """First train the rider can still make on foot: its leave-by time (live
-    departure minus walk) is no more than LEAVE_BY_GRACE_MINUTES ago. Falls
-    back to the first train if none qualify."""
+def _is_reachable(row: dict, walk_time: int) -> bool:
+    """True while the rider can still make this train on foot: its leave-by
+    time (live departure minus walk) is no more than LEAVE_BY_GRACE_MINUTES ago."""
     now = _now()
+    departure = parse_time(row["orig_departure_time"]) + timedelta(
+        minutes=parse_delay_minutes(row.get("orig_delay", "On time"))
+    )
+    leave_by = anchor_to_today(now, departure - timedelta(minutes=walk_time))
+    return (leave_by - now).total_seconds() / 60 >= -LEAVE_BY_GRACE_MINUTES
+
+
+def _first_reachable(results: list, walk_time: int) -> dict:
+    """First train the rider can still make on foot. Falls back to the first
+    train if none qualify."""
     for r in results:
-        departure = parse_time(r["orig_departure_time"]) + timedelta(
-            minutes=parse_delay_minutes(r.get("orig_delay", "On time"))
-        )
-        leave_by = anchor_to_today(now, departure - timedelta(minutes=walk_time))
-        if (leave_by - now).total_seconds() / 60 >= -LEAVE_BY_GRACE_MINUTES:
+        if _is_reachable(r, walk_time):
             return r
     return results[0]
 
@@ -541,7 +546,10 @@ def get_commute(
     destination: str,
     target_time: str | None = None,
     preferred_transfer: str | None = None,
+    keep_departed: bool = False,
 ) -> dict:
+    """`keep_departed` is for a rider known to be out already: they are most
+    likely on the train that just left, so the trip stays with it."""
     walk_time = WALK_TIMES.get(origin, DEFAULT_WALK_TIME_MINUTES)
     transfer_station = preferred_transfer or DEFAULT_TRANSFER_STATION
 
@@ -551,7 +559,15 @@ def get_commute(
 
     # 1. Direct Trips
     direct_trips = [r for r in raw_results if r.get("isdirect") == "true"]
-    if direct_trips:
+    # SEPTA lists a train until it reaches the destination, so the last direct
+    # train of the morning stays on the list long after it left. Once nobody
+    # can catch a direct train, a later trip with a change is the one to show.
+    direct_gone = (
+        not target_time and not keep_departed
+        and not any(_is_reachable(r, walk_time) for r in direct_trips)
+        and any(_is_reachable(r, walk_time) for r in raw_results)
+    )
+    if direct_trips and not direct_gone:
         chosen_direct = _pick(direct_trips, target_time, walk_time)
         trip = _build_direct_trip(
             chosen_direct, walk_time, alternatives=raw_results,
@@ -564,10 +580,11 @@ def get_commute(
     def septa_fallback(error: str, stale: bool) -> dict:
         if not raw_results:
             return {"error": error}
-        pick = _pick(raw_results, target_time, walk_time)
+        candidates = [r for r in raw_results if r not in direct_trips] if direct_gone else raw_results
+        pick = _pick(candidates, target_time, walk_time)
         trip = _build_transfer_trip(
             pick, walk_time, alternatives=raw_results,
-            backup_departure=_next_backup_departure(raw_results, pick),
+            backup_departure=_next_backup_departure(candidates, pick),
         )
         trip["itineraries"] = []
         trip["data_stale"] = stale

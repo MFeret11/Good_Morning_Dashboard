@@ -16,6 +16,19 @@ WEATHER_FRESH_SECONDS = 600       # reuse a fetch this recent without calling Op
 WEATHER_CACHE_TTL_SECONDS = 3600  # on failure, serve a fetch up to this old, marked stale
 
 
+# Open-Meteo now and then labels an hour of plain rain as snow or freezing
+# rain. Above this temperature neither can reach the ground, so such an hour
+# is read as the matching kind of rain.
+FROZEN_MAX_TEMP_F = 40
+RAIN_INSTEAD = {71: 61, 73: 63, 75: 65, 77: 61, 85: 80, 86: 82, 56: 51, 57: 55, 66: 61, 67: 65}
+
+
+def _believable_code(code, temp_f):
+    if temp_f is not None and temp_f > FROZEN_MAX_TEMP_F:
+        return RAIN_INSTEAD.get(code, code)
+    return code
+
+
 def _find_severe(hours):
     hits = [h for h in hours if h["code"] in SEVERE_CODES]
     return hits[0] if hits else None
@@ -105,7 +118,7 @@ def _summarize(data: dict, stale: bool) -> dict:
                 "hour": hour,
                 "temp": temps[i],
                 "precip": precip[i],
-                "code": codes[i],
+                "code": _believable_code(codes[i], temps[i]),
                 "precip_chance": precip_probs[i] if i < len(precip_probs) else 0,
             })
 
