@@ -117,6 +117,32 @@ def _get_trainview_feed() -> list:
     return cached_data
 
 
+# Where TrainView puts a train it has no GPS position for. Such a row also
+# keeps naming the train's first station as its current stop, with a delay that
+# climbs every minute, whether the train is being held there or is running
+# with its tracker off. The feed alone can't tell those apart.
+_NO_POSITION = (39.9538889, -75.1677778)
+
+
+def has_live_position(train: dict) -> bool:
+    """False for a TrainView row with no real GPS position behind it."""
+    try:
+        lat, lon = float(train["lat"]), float(train["lon"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return abs(lat - _NO_POSITION[0]) > 1e-6 or abs(lon - _NO_POSITION[1]) > 1e-6
+
+
+def untracked_listed_trains() -> list[str]:
+    """Trains listed for the rider's commute today that TrainView currently
+    shows without a GPS position."""
+    listed = {train for rows in _SEEN_ROWS.values() for train in rows}
+    return sorted(
+        str(t.get("trainno")) for t in _get_trainview_feed()
+        if str(t.get("trainno")) in listed and not has_live_position(t)
+    )
+
+
 def _fetch_live_train_metadata(train_number: str) -> dict:
     """Extracts telemetry from TrainView and evaluates GPS stall without 24-hr leakage."""
     if not train_number or not str(train_number).isdigit():
@@ -136,11 +162,16 @@ def _fetch_live_train_metadata(train_number: str) -> dict:
     lat = match.get("lat")
     lon = match.get("lon")
     track = match.get("track", "TBD")
+    located = has_live_position(match)
 
     is_stalled = False
     stall_minutes = 0
 
-    if train_number in _TRAIN_POSITIONS:
+    if not located:
+        # No position to judge by: "still at the first stop" is all TrainView
+        # ever says about a train it can't see, so it is not evidence of a stall.
+        _TRAIN_POSITIONS.pop(train_number, None)
+    elif train_number in _TRAIN_POSITIONS:
         prev = _TRAIN_POSITIONS[train_number]
         time_since_first_seen = now - prev["first_seen_at"]
 
@@ -168,6 +199,7 @@ def _fetch_live_train_metadata(train_number: str) -> dict:
         "stall_minutes": stall_minutes,
         "consist": match.get("consist"),
         "late_minutes": late_minutes,
+        "position_unknown": not located,
     }
 
 
@@ -195,6 +227,7 @@ def _build_walk_and_leave_by(chosen: dict, walk_time: int) -> dict:
         "origin_delay_unknown": is_delay_unknown(delay_str),
         "origin_track": meta.get("track", "TBD"),
         "origin_current_stop": meta.get("current_stop", "En route"),
+        "origin_position_unknown": meta.get("position_unknown", False),
         "is_stalled": meta.get("is_stalled", False),
         "stall_minutes": meta.get("stall_minutes", 0),
         "is_cancelled": is_cancelled,

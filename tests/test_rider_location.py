@@ -15,9 +15,15 @@ def leg(train, dep, arr, delay="On time", line="Lansdale/Doylestown"):
             "orig_arrival_time": arr, "orig_delay": delay, "isdirect": "false"}
 
 
-def tv(train, lat, lon, late=0):
+def tv(train, lat, lon, late=0, heading=""):
     return {"trainno": train, "lat": str(lat), "lon": str(lon), "late": late,
-            "currentstop": "Somewhere", "TRACK": "1"}
+            "currentstop": "Somewhere", "TRACK": "1", "heading": str(heading)}
+
+
+def untracked_tv(train, late=0, stop="First Stop"):
+    """How TrainView lists a train it has no GPS position for."""
+    return {"trainno": train, "lat": "39.9538889", "lon": "-75.1677778", "late": late,
+            "currentstop": stop, "nextstop": stop, "heading": "", "consist": "", "TRACK": "1"}
 
 
 def septa(responses, trainview=()):
@@ -104,6 +110,42 @@ def test_an_old_fix_says_nothing_about_now():
     fix(40.119, -75.200, minutes_ago=30)
     now = rider.current()
     assert now["fresh"] is False and now["on_train"] is None and now["home"] is False
+
+
+def test_a_train_passing_the_other_way_is_not_the_riders_train():
+    # Rider heads north; the only train nearby is heading south past them.
+    feed(tv("9113", 40.105, -75.200, heading=180))
+    fix(40.100, -75.200, minutes_ago=2)
+    feed(tv("9113", 40.112, -75.200, heading=180))
+    fix(40.115, -75.200)
+    assert rider.current()["on_train"] is None
+
+
+def test_a_train_with_no_gps_position_is_never_matched_by_distance():
+    # The rider is right where TrainView parks trains it can't see.
+    feed(untracked_tv("9260"))
+    fix(39.950, -75.1677778, minutes_ago=2)
+    fix(39.9538889, -75.1677778)
+    assert rider.current()["on_train"] is None
+
+
+def test_moving_at_train_speed_with_no_train_alongside_is_riding_untracked():
+    feed(untracked_tv("9260"))
+    fix(40.100, -75.200, minutes_ago=3)
+    fix(40.110, -75.200, minutes_ago=2)
+    assert rider.current()["riding_untracked"] is False     # one fast fix isn't enough
+    fix(40.113, -75.200, minutes_ago=1)                     # slowing into a station
+    assert rider.current()["riding_untracked"] is True
+    fix(40.113, -75.200, minutes_ago=0.5)                   # stopped at it
+    assert rider.current()["riding_untracked"] is True
+
+
+def test_walking_is_not_riding_untracked():
+    feed()
+    fix(40.1000, -75.200, minutes_ago=3)
+    fix(40.1006, -75.200, minutes_ago=2)
+    fix(40.1012, -75.200, minutes_ago=1)
+    assert rider.current()["riding_untracked"] is False
 
 
 # --- the trip for the train the rider is on -----------------------------------
@@ -197,6 +239,59 @@ def test_dashboard_follows_the_train_the_rider_is_on(monkeypatch):
     assert commute["origin_train"] == "9250"
     assert commute["connection_train"] == "3556"
     assert commute["rider_location_age_minutes"] == 0
+
+
+MORNING = {("Ambler", "Glenside"): [
+    {**leg("9260", "7:15AM", "7:49AM", delay="20 mins"), "isdirect": "true"},
+    {**leg("9264", "7:45AM", "8:19AM"), "isdirect": "true"},
+]}
+
+
+def _morning(monkeypatch, trainview):
+    monkeypatch.setattr(app.main, "get_active_window", lambda: "morning")
+    monkeypatch.setattr(app.main, "DEFAULT_HOME_STATION", "Ambler")
+    monkeypatch.setattr(app.main, "DEFAULT_WORK_STATION", "Glenside")
+    monkeypatch.setattr(app.main, "get_alerts", lambda: {"has_critical_alerts": False, "critical_alerts": []})
+    monkeypatch.setattr(app.main, "get_weather", lambda: {})
+    with patch("app.commute.requests.get", side_effect=septa(MORNING, trainview)):
+        return app.main.get_dashboard()
+
+
+def test_a_train_with_no_gps_position_is_never_called_stalled(monkeypatch):
+    monkeypatch.setattr(app.commute, "_now", lambda: datetime(2026, 1, 5, 7, 0))
+    _morning(monkeypatch, [untracked_tv("9260", late=20)])
+    app.commute._TRAINVIEW_CACHE = ([], 0.0)
+    with patch("app.commute.time.time", return_value=time.time() + 1200):
+        commute = _morning(monkeypatch, [untracked_tv("9260", late=40)])["commute"]
+    assert commute["origin_train"] == "9260"
+    assert commute["is_stalled"] is False
+    assert commute["origin_position_unknown"] is True
+
+
+def test_rider_moving_on_the_untracked_train_overrides_septas_parked_guess(monkeypatch):
+    monkeypatch.setattr(app.commute, "_now", lambda: datetime(2026, 1, 5, 7, 20))
+    trainview = [untracked_tv("9260", late=20), tv("9113", 40.3, -75.2)]
+    _morning(monkeypatch, trainview)
+    fix(40.100, -75.200, minutes_ago=2)
+    fix(40.110, -75.200, minutes_ago=1)
+    fix(40.120, -75.200)
+    result = _morning(monkeypatch, trainview)
+    commute = result["commute"]
+    assert commute["rider_on_train"] == "9260"
+    assert commute["origin_train"] == "9260"
+    assert commute["is_stalled"] is False
+    assert commute["origin_delay_unknown"] is True
+    assert result["overall_status"] != "stalled"
+
+
+def test_untracked_riding_names_no_train_when_two_listed_trains_have_no_position(monkeypatch):
+    monkeypatch.setattr(app.commute, "_now", lambda: datetime(2026, 1, 5, 7, 20))
+    trainview = [untracked_tv("9260", late=20), untracked_tv("9264")]
+    _morning(monkeypatch, trainview)
+    fix(40.100, -75.200, minutes_ago=2)
+    fix(40.110, -75.200, minutes_ago=1)
+    fix(40.120, -75.200)
+    assert _morning(monkeypatch, trainview)["commute"]["rider_on_train"] is None
 
 
 def test_dashboard_reports_the_rider_home(monkeypatch):

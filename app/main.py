@@ -12,7 +12,7 @@ from app.config import (
     AFTERNOON_TARGET_DEPARTURE_TIME,
 )
 from app import rider
-from app.commute import get_commute, get_trip_for_boarded_train
+from app.commute import get_commute, get_trip_for_boarded_train, untracked_listed_trains
 from app.alerts import get_alerts, alert_summary, no_alerts
 from app.weather import get_weather
 from app.scheduler import start_scheduler
@@ -155,12 +155,28 @@ def get_dashboard(
     # on, which is often not the one nearest the target time.
     who = rider.current() if not (origin and destination) else None
     on_train = who["on_train"] if who else None
-    if on_train and window == "afternoon" and "error" not in commute \
-            and on_train != commute.get("origin_train"):
-        boarded = get_trip_for_boarded_train(
-            on_train, DEFAULT_WORK_STATION, DEFAULT_HOME_STATION, DEFAULT_TRANSFER_STATION)
+    # Moving at train speed with no located train alongside: if exactly one of
+    # today's listed trains has no GPS position in TrainView, that is the one.
+    untracked = False
+    if who and not on_train and who["riding_untracked"] and window:
+        candidates = untracked_listed_trains()
+        if len(candidates) == 1:
+            on_train, untracked = candidates[0], True
+    if on_train and "error" not in commute and on_train != commute.get("origin_train") \
+            and (window == "afternoon" or (window == "morning" and untracked)):
+        ends = (DEFAULT_WORK_STATION, DEFAULT_HOME_STATION) if window == "afternoon" \
+            else (DEFAULT_HOME_STATION, DEFAULT_WORK_STATION)
+        boarded = get_trip_for_boarded_train(on_train, *ends, DEFAULT_TRANSFER_STATION)
         if boarded:
             commute = boarded
+    if untracked and commute.get("origin_train") == on_train:
+        # TrainView shows a train it can't see as parked at its first stop with
+        # a delay that grows by the minute. The rider's own movement says it is
+        # running, so neither the stall nor that delay is to be believed.
+        commute = {**commute, "is_stalled": False, "stall_minutes": 0,
+                   "origin_delay_unknown": True, "origin_delay_text": "no live position"}
+        if commute.get("trip_type") == "direct":
+            commute["at_risk"] = False
 
     # Outside commute hours nothing shows the alerts, so don't ask SEPTA for
     # them every time Home Assistant polls.
