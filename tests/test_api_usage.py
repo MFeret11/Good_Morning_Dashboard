@@ -68,8 +68,10 @@ def window_at(monkeypatch, weekday_hour, heading_home=False, day=5):
 def test_a_rider_on_the_way_home_gets_trains_outside_the_afternoon_window(monkeypatch):
     assert window_at(monkeypatch, (19, 30)) is None
     assert window_at(monkeypatch, (19, 30), heading_home=True) == "afternoon"
-    assert window_at(monkeypatch, (11, 0), heading_home=True) == "afternoon"
-    assert window_at(monkeypatch, (10, 59), heading_home=True) is None
+    # From the end of the morning window: Home Assistant shows the card as soon as they leave.
+    assert window_at(monkeypatch, (8, 0), heading_home=True) == "afternoon"
+    assert window_at(monkeypatch, (9, 30), heading_home=True) == "afternoon"
+    assert window_at(monkeypatch, (8, 0)) is None
     assert window_at(monkeypatch, (23, 0), heading_home=True) is None
     assert window_at(monkeypatch, (7, 0), heading_home=True) == "morning"
     assert window_at(monkeypatch, (15, 0), heading_home=True, day=10) is None  # a Saturday

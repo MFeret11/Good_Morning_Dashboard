@@ -89,8 +89,10 @@ AFTERNOON_START, AFTERNOON_END = 14, 19
 DASHBOARD_MORNING_START, DASHBOARD_MORNING_END = 6, 8
 DASHBOARD_AFTERNOON_START, DASHBOARD_AFTERNOON_END = 14, 18
 # Once Home Assistant says the rider has left work, the trip home is looked up
-# at any hour in this range, not only in the afternoon window above.
-HEADING_HOME_START, HEADING_HOME_END = 11, 23
+# at any hour in this range, not only in the afternoon window above. It starts
+# when the morning window ends, because Home Assistant shows the kitchen's
+# train-home card as soon as the rider leaves work, whatever the hour.
+HEADING_HOME_START, HEADING_HOME_END = DASHBOARD_MORNING_END, 23
 # The "Left work" push goes out only from this time on, so a walk at lunch
 # doesn't send one.
 _departure_from = datetime.strptime(_env_clock_time("DEPARTURE_PUSH_FROM", "2:00PM"), "%I:%M%p")

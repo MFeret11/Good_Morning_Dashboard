@@ -38,7 +38,7 @@ app = FastAPI(
 def get_active_window(heading_home: bool = False) -> str | None:
     """Determines active commute window based on day and 24h clock. Once the
     rider has left work (`heading_home`, from Home Assistant) the trip home is
-    looked up whatever the hour, from late morning to late evening."""
+    looked up whatever the hour, from the end of the morning window to late evening."""
     now = datetime.now()
     if now.weekday() >= 5:  # Saturday=5, Sunday=6
         return None
