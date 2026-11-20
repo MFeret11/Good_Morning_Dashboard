@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 import app.afternoon_check as ac
+import app.config
 
 NO_ALERTS = {"has_critical_alerts": False, "critical_alerts": []}
 SUSPENSION = {"has_critical_alerts": True, "critical_alerts": [
@@ -321,6 +322,13 @@ def test_no_departure_push_before_the_afternoon_or_on_weekends(day):
     day.at("12:30")                 # out for lunch
     ac.run_departure_check()
     day.now = day.now.replace(day=10, hour=16)  # a Saturday
+    ac.run_departure_check()
+    assert day.sent == []
+
+
+def test_no_departure_push_on_a_day_off_the_commute(day, monkeypatch):
+    monkeypatch.setattr(app.config, "COMMUTE_DAYS", [0, 1, 2, 3])  # Monday to Thursday
+    day.now = day.now.replace(day=9, hour=16)  # a Friday
     ac.run_departure_check()
     assert day.sent == []
 

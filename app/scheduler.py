@@ -4,7 +4,9 @@ from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from app.config import NOTIFY_HOUR, NOTIFY_MINUTE, AFTERNOON_END, HEADING_HOME_START, HEADING_HOME_END
+from app.config import (
+    NOTIFY_HOUR, NOTIFY_MINUTE, AFTERNOON_END, HEADING_HOME_START, HEADING_HOME_END, COMMUTE_DAYS_CRON,
+)
 from app.afternoon_check import run_afternoon_check, run_follow_up_check
 
 FOLLOW_UP_EVERY_MINUTES = 5
@@ -17,7 +19,7 @@ scheduler = BackgroundScheduler(executors={"default": ThreadPoolExecutor(1)})
 def start_scheduler():
     scheduler.add_job(
         run_afternoon_check,
-        trigger=CronTrigger(day_of_week="mon-fri", hour=NOTIFY_HOUR, minute=NOTIFY_MINUTE),
+        trigger=CronTrigger(day_of_week=COMMUTE_DAYS_CRON, hour=NOTIFY_HOUR, minute=NOTIFY_MINUTE),
         id="afternoon_commute_check",
         replace_existing=True,
         # APScheduler's default grace is 1 second: a run that starts any later
@@ -32,7 +34,7 @@ def start_scheduler():
     scheduler.add_job(
         run_follow_up_check,
         trigger=CronTrigger(
-            day_of_week="mon-fri",
+            day_of_week=COMMUTE_DAYS_CRON,
             hour=f"{min(NOTIFY_HOUR, HEADING_HOME_START)}-{max(NOTIFY_HOUR, AFTERNOON_END - 1, HEADING_HOME_END - 1)}",
             minute=f"*/{FOLLOW_UP_EVERY_MINUTES}",
         ),
@@ -42,7 +44,7 @@ def start_scheduler():
         coalesce=True,
     )
     scheduler.start()
-    print(f"[scheduler] Afternoon check scheduled for {NOTIFY_HOUR:02d}:{NOTIFY_MINUTE:02d} on weekdays, "
+    print(f"[scheduler] Afternoon check scheduled for {NOTIFY_HOUR:02d}:{NOTIFY_MINUTE:02d} on {COMMUTE_DAYS_CRON}, "
           f"follow-ups every {FOLLOW_UP_EVERY_MINUTES} min until the train leaves")
 
 

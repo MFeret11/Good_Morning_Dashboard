@@ -3,7 +3,8 @@
 A small FastAPI service that says when to leave for the train. It watches
 SEPTA Regional Rail for a morning and evening commute (including trips that
 need a transfer), adds the weather for the walk, and sends a push notification
-on weekday afternoons with the recommended train home.
+on commute-day afternoons with the recommended train home. Commute days
+default to Monday to Friday; set `COMMUTE_DAYS` for a hybrid schedule.
 
 Built to be polled by Home Assistant for a wall-mounted dashboard.
 
@@ -28,7 +29,7 @@ Built to be polled by Home Assistant for a wall-mounted dashboard.
 - **Fails soft.** Caches the last good SEPTA and weather responses and serves
   them when an upstream API times out.
 - **Afternoon notification.** A scheduled job sends an ntfy.sh push each
-  weekday with the recommended train home and any rain or snow on the way.
+  commute day with the recommended train home and any rain or snow on the way.
   It then re-checks every 5 minutes until that train leaves and pushes again
   only if things get worse: a cancellation, a stall, a missed connection, a
   new service alert, or 10 more minutes of delay.

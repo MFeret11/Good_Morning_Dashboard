@@ -9,7 +9,7 @@ from app.weather import get_weather
 from app.config import (
     DEFAULT_WORK_STATION, DEFAULT_HOME_STATION, DEFAULT_TRANSFER_STATION,
     AFTERNOON_TARGET_DEPARTURE_TIME, SIGNIFICANT_DELAY_MINUTES, AFTERNOON_END,
-    HEADING_HOME_END, DEPARTURE_PUSH_FROM,
+    HEADING_HOME_END, DEPARTURE_PUSH_FROM, is_commute_day,
 )
 from app.notifications import send_notification
 from app import rider
@@ -413,9 +413,9 @@ def run_afternoon_check():
 def run_departure_check():
     """Home Assistant says the rider just left work: push the next train they
     can make (what the dashboard shows), and let the follow-ups track it.
-    Weekdays only, from DEPARTURE_PUSH_FROM on."""
+    Commute days only (COMMUTE_DAYS), from DEPARTURE_PUSH_FROM on."""
     now = _now()
-    if now.weekday() >= 5 or now.time() < DEPARTURE_PUSH_FROM:
+    if not is_commute_day(now) or now.time() < DEPARTURE_PUSH_FROM:
         return
     last = _follow_up.get("departure_at")
     if last and now - last < timedelta(minutes=DEPARTURE_REPEAT_MINUTES):

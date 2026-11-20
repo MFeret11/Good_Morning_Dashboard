@@ -49,6 +49,26 @@ def _env_walk_times(name: str, default: str) -> dict[str, int]:
     return walk_times
 
 
+_DAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+def _env_days(name: str, default: str) -> list[int]:
+    """'mon,tue,thu' -> [0, 1, 3] (Monday is 0, as datetime.weekday() counts).
+    Full day names work too ('Monday'); case doesn't matter."""
+    raw = _env(name, default)
+    days = set()
+    for item in raw.split(","):
+        day = item.strip().lower()[:3]
+        if not day:
+            continue
+        if day not in _DAY_NAMES:
+            raise ValueError(f"{name} entries must be days like 'mon' or 'tue', got {item.strip()!r}")
+        days.add(_DAY_NAMES.index(day))
+    if not days:
+        raise ValueError(f"{name} must list at least one day")
+    return sorted(days)
+
+
 def _env_set(name: str, default: str) -> set[str]:
     return {item.strip() for item in _env(name, default).split(",") if item.strip()}
 
@@ -78,6 +98,18 @@ LEAVE_NOW_THRESHOLD_MINUTES = 3       # <= 3 min to leave = urgent "LEAVE NOW"
 LEAVE_BY_GRACE_MINUTES = 2            # Still show a train whose leave-by passed up to 2 min ago; skip older ones
 AFTERNOON_TARGET_DEPARTURE_TIME = _env_clock_time("AFTERNOON_TARGET_DEPARTURE", "5:00PM")
 MISSED_CONNECTION_BUFFER_MINUTES = -5 # Floor below which connection is uncatchable
+
+# --- Commute days ---
+# The days the rider goes in to work. On other days the service makes no
+# SEPTA calls and sends no pushes, as on weekends.
+COMMUTE_DAYS = _env_days("COMMUTE_DAYS", "mon,tue,wed,thu,fri")
+# The same days as an APScheduler day_of_week expression ('mon,tue,wed').
+COMMUTE_DAYS_CRON = ",".join(_DAY_NAMES[d] for d in COMMUTE_DAYS)
+
+
+def is_commute_day(when: datetime) -> bool:
+    return when.weekday() in COMMUTE_DAYS
+
 
 # --- Active Commute Windows (24hr clock) ---
 MORNING_START, MORNING_END = 5, 9

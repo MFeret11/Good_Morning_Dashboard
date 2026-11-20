@@ -9,7 +9,7 @@ from app.config import (
     DEFAULT_HOME_STATION, DEFAULT_WORK_STATION, DEFAULT_TRANSFER_STATION,
     DASHBOARD_MORNING_START, DASHBOARD_MORNING_END, DASHBOARD_AFTERNOON_START, DASHBOARD_AFTERNOON_END,
     ACTIVE_POLL_INTERVAL_MS, IDLE_POLL_INTERVAL_MS,
-    AFTERNOON_TARGET_DEPARTURE_TIME, HEADING_HOME_START, HEADING_HOME_END,
+    AFTERNOON_TARGET_DEPARTURE_TIME, HEADING_HOME_START, HEADING_HOME_END, is_commute_day,
 )
 from app import rider
 from app.commute import get_commute, get_trip_for_boarded_train, untracked_listed_trains
@@ -40,7 +40,7 @@ def get_active_window(heading_home: bool = False) -> str | None:
     rider has left work (`heading_home`, from Home Assistant) the trip home is
     looked up whatever the hour, from the end of the morning window to late evening."""
     now = datetime.now()
-    if now.weekday() >= 5:  # Saturday=5, Sunday=6
+    if not is_commute_day(now):  # COMMUTE_DAYS; weekdays unless set otherwise
         return None
     hour = now.hour
     if DASHBOARD_MORNING_START <= hour < DASHBOARD_MORNING_END:

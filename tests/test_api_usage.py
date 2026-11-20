@@ -4,6 +4,7 @@ from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import app.commute
+import app.config
 import app.main
 from app.commute import get_commute
 
@@ -75,6 +76,13 @@ def test_a_rider_on_the_way_home_gets_trains_outside_the_afternoon_window(monkey
     assert window_at(monkeypatch, (23, 0), heading_home=True) is None
     assert window_at(monkeypatch, (7, 0), heading_home=True) == "morning"
     assert window_at(monkeypatch, (15, 0), heading_home=True, day=10) is None  # a Saturday
+
+
+def test_no_trains_on_a_day_the_rider_works_from_home(monkeypatch):
+    monkeypatch.setattr(app.config, "COMMUTE_DAYS", [0, 1, 2, 3])  # Monday to Thursday
+    assert window_at(monkeypatch, (7, 0), day=8) == "morning"  # Thursday
+    assert window_at(monkeypatch, (7, 0), day=9) is None  # Friday
+    assert window_at(monkeypatch, (15, 0), heading_home=True, day=9) is None
 
 
 def test_dashboard_looks_up_trains_only_around_the_commute(monkeypatch):
