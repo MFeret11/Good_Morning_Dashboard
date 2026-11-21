@@ -145,6 +145,17 @@ def _moved_m(prev: dict, lat, lon) -> float:
         return math.inf
 
 
+def _at_first_station(train: dict) -> bool:
+    """True while a TrainView row is still at the station its run starts from
+    (`SOURCE`), waiting to leave. SOURCE is often shortened ("Jefferson" for
+    "Jefferson Station", "Chestnut H East" for "Chestnut Hill East"), so each of
+    its words only has to start the matching word of the current stop."""
+    source = str(train.get("SOURCE") or "").lower().split()
+    stop = str(train.get("currentstop") or "").lower().split()
+    return bool(source) and len(source) <= len(stop) and all(
+        word.startswith(short) for short, word in zip(source, stop))
+
+
 def has_live_position(train: dict) -> bool:
     """False for a TrainView row with no real GPS position behind it."""
     try:
@@ -188,9 +199,11 @@ def _fetch_live_train_metadata(train_number: str) -> dict:
     is_stalled = False
     stall_minutes = 0
 
-    if not located:
+    if not located or _at_first_station(match):
         # No position to judge by: "still at the first stop" is all TrainView
         # ever says about a train it can't see, so it is not evidence of a stall.
+        # A located train at its first station is waiting to start its run; if
+        # it is held there, the delay estimate says so, not the stall check.
         _TRAIN_POSITIONS.pop(train_number, None)
     elif train_number in _TRAIN_POSITIONS:
         prev = _TRAIN_POSITIONS[train_number]

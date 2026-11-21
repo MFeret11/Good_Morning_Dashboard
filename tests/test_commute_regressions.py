@@ -374,8 +374,9 @@ def test_tight_connection_push_never_shows_negative_minutes(mock_get):
     assert "0 min late" not in message
 
 
-def _trainview_row(train, stop, lat, lon):
-    return {"trainno": train, "currentstop": stop, "lat": str(lat), "lon": str(lon), "late": 0}
+def _trainview_row(train, stop, lat, lon, source="Somewhere Else"):
+    return {"trainno": train, "currentstop": stop, "SOURCE": source,
+            "lat": str(lat), "lon": str(lon), "late": 0}
 
 
 def test_a_train_running_between_stations_is_not_stalled():
@@ -404,3 +405,40 @@ def test_a_train_running_between_stations_is_not_stalled():
     stopped = metadata_at(720, [_trainview_row("9254", "Example Station", 40.0001, -75.0002)])
     assert stopped["is_stalled"] is True
     assert stopped["stall_minutes"] == 12
+
+
+def test_a_train_waiting_at_the_start_of_its_run_is_not_stalled():
+    """A train sitting at its first station before it leaves (seen live: 11 and 15
+    minutes) isn't stalled. If it's held there, its delay says so. Once it has left,
+    a stop at a later station still counts."""
+    import time as _time
+    import app.commute as commute
+
+    def metadata_at(seconds, rows):
+        commute._TRAINVIEW_CACHE = (rows, start + seconds)
+        with patch("app.commute.time.time", return_value=start + seconds):
+            return commute._fetch_live_train_metadata("9254")
+
+    start = _time.time()
+    commute._TRAIN_POSITIONS.clear()
+    # SOURCE is SEPTA's short form of the first station's name
+    metadata_at(0, [_trainview_row("9254", "Example Hill Station", 40.0, -75.0, source="Example H")])
+    waiting = metadata_at(900, [_trainview_row("9254", "Example Hill Station", 40.0, -75.0, source="Example H")])
+    assert waiting["is_stalled"] is False
+
+    # Further down the line, standing still for 12 minutes is a stall
+    metadata_at(1000, [_trainview_row("9254", "Next Station", 40.05, -75.05, source="Example H")])
+    stopped = metadata_at(1720, [_trainview_row("9254", "Next Station", 40.05, -75.05, source="Example H")])
+    assert stopped["is_stalled"] is True
+
+
+def test_first_station_names_match_septas_short_forms():
+    """SEPTA shortens SOURCE: "Jefferson" for "Jefferson Station", "Chestnut H East"
+    for "Chestnut Hill East", "Temple U" for "Temple University"."""
+    from app.commute import _at_first_station
+    assert _at_first_station({"SOURCE": "Example", "currentstop": "Example Station"})
+    assert _at_first_station({"SOURCE": "Example H East", "currentstop": "Example Hill East"})
+    assert _at_first_station({"SOURCE": "Example U", "currentstop": "Example University"})
+    assert not _at_first_station({"SOURCE": "Example H West", "currentstop": "Example Hill East"})
+    assert not _at_first_station({"SOURCE": "Example", "currentstop": "Other Place"})
+    assert not _at_first_station({"SOURCE": "", "currentstop": "Other Place"})
