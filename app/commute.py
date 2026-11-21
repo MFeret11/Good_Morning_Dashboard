@@ -2,6 +2,7 @@
 transfer trips, the next three options, live tracks, delay-aware connections,
 a fallback cache and stall detection."""
 import logging
+import math
 import time
 from datetime import datetime, timedelta
 import requests
@@ -36,6 +37,10 @@ CACHE_TTL_SECONDS = 300
 TRIP_FRESH_SECONDS = 60
 TRAINVIEW_TTL_SECONDS = 60
 STALL_THRESHOLD_SECONDS = 600
+# TrainView's currentstop is the last station the train called at, so it stays the
+# same for a whole run between stations (10+ minutes on an express stretch). A
+# train is stalled only if its GPS position has barely moved as well.
+STALL_MAX_MOVE_M = 400
 
 # NextToArrive reads the result count from req3. It ignores "top" and
 # defaults to 4 trains (~2.5 hours), too short to reach an evening connection
@@ -124,6 +129,22 @@ def _get_trainview_feed() -> list:
 _NO_POSITION = (39.9538889, -75.1677778)
 
 
+def distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Distance in metres between two GPS positions."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    a = (math.sin((p2 - p1) / 2) ** 2
+         + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lon2 - lon1) / 2) ** 2)
+    return 6_371_000 * 2 * math.asin(math.sqrt(a))
+
+
+def _moved_m(prev: dict, lat, lon) -> float:
+    """How far a train has gone since `prev` was recorded (infinite if unreadable)."""
+    try:
+        return distance_m(float(prev["lat"]), float(prev["lon"]), float(lat), float(lon))
+    except (KeyError, TypeError, ValueError):
+        return math.inf
+
+
 def has_live_position(train: dict) -> bool:
     """False for a TrainView row with no real GPS position behind it."""
     try:
@@ -178,7 +199,8 @@ def _fetch_live_train_metadata(train_number: str) -> dict:
         # Reset if stale (e.g. from yesterday or > 1 hour ago)
         if time_since_first_seen > 3600:
             _TRAIN_POSITIONS[train_number] = {"stop": current_stop, "lat": lat, "lon": lon, "first_seen_at": now}
-        elif prev["stop"] == current_stop and current_stop != "Unknown":
+        elif (prev["stop"] == current_stop and current_stop != "Unknown"
+              and _moved_m(prev, lat, lon) <= STALL_MAX_MOVE_M):
             if time_since_first_seen >= STALL_THRESHOLD_SECONDS:
                 is_stalled = True
                 stall_minutes = round(time_since_first_seen / 60)

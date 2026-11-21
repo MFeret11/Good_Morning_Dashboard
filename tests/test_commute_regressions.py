@@ -372,3 +372,35 @@ def test_tight_connection_push_never_shows_negative_minutes(mock_get):
     assert "-3" not in message
     assert "about 3 min after" in message
     assert "0 min late" not in message
+
+
+def _trainview_row(train, stop, lat, lon):
+    return {"trainno": train, "currentstop": stop, "lat": str(lat), "lon": str(lon), "late": 0}
+
+
+def test_a_train_running_between_stations_is_not_stalled():
+    """TrainView's currentstop is the last station called at, so it stays the same for
+    a whole run between stations. Ten minutes on one express stretch read as "Train
+    Stalled on Track" even though the train was moving; a stall now needs the train's
+    position to stay put as well."""
+    import time as _time
+    import app.commute as commute
+
+    def metadata_at(seconds, rows):
+        commute._TRAINVIEW_CACHE = (rows, start + seconds)
+        with patch("app.commute.time.time", return_value=start + seconds):
+            return commute._fetch_live_train_metadata("9254")
+
+    start = _time.time()
+    commute._TRAIN_POSITIONS.clear()
+    # Same station name for 12 minutes while the train covers about 9 km
+    metadata_at(0, [_trainview_row("9254", "Example Station", 40.000, -75.000)])
+    moving = metadata_at(720, [_trainview_row("9254", "Example Station", 40.060, -74.930)])
+    assert moving["is_stalled"] is False
+
+    # Same station name, same place (GPS jitter only) for 12 minutes: stalled
+    commute._TRAIN_POSITIONS.clear()
+    metadata_at(0, [_trainview_row("9254", "Example Station", 40.000, -75.000)])
+    stopped = metadata_at(720, [_trainview_row("9254", "Example Station", 40.0001, -75.0002)])
+    assert stopped["is_stalled"] is True
+    assert stopped["stall_minutes"] == 12

@@ -10,7 +10,7 @@ API."""
 import math
 import time
 
-from app.commute import _get_trainview_feed, has_live_position
+from app.commute import _get_trainview_feed, distance_m as _distance_m, has_live_position
 
 # A phone fix and a TrainView position can each be a minute or two old, and a
 # train covers over a kilometre a minute, so "next to the train" is generous.
@@ -31,13 +31,6 @@ _state: dict = {"fix": None, "votes": [], "train": None, "untracked": False, "he
 
 def reset() -> None:
     _state.update({"fix": None, "votes": [], "train": None, "untracked": False, "heading_home": None})
-
-
-def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    a = (math.sin((p2 - p1) / 2) ** 2
-         + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lon2 - lon1) / 2) ** 2)
-    return 6_371_000 * 2 * math.asin(math.sqrt(a))
 
 
 def _bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
